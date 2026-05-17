@@ -1,0 +1,313 @@
+---
+title: 'Memory backends, embeddings, and hybrid search config'
+description: 'Configure SQLite, PostgreSQL, Lucid, Markdown, or no-op memory backends with OpenAI or custom embedding providers and weighted hybrid search.'
+---
+
+ZeroClaw includes a full-stack memory search engine built without external dependencies — no Pinecone, no Elasticsearch, no LangChain. The agent automatically recalls, saves, and manages memory through dedicated tools. All memory settings live under `[memory]` in `~/.zeroclaw/config.toml`.
+
+## Memory system architecture
+
+| Layer | Implementation |
+|---|---|
+| **Vector DB** | Embeddings stored as BLOB in SQLite, cosine similarity search |
+| **Keyword search** | FTS5 virtual tables with BM25 scoring |
+| **Hybrid merge** | Custom weighted merge function (`vector.rs`) |
+| **Embeddings** | `EmbeddingProvider` trait — OpenAI, custom URL, or noop |
+| **Chunking** | Line-based markdown chunker with heading preservation |
+| **Caching** | SQLite `embedding_cache` table with LRU eviction |
+| **Safe reindex** | Rebuild FTS5 and re-embed missing vectors atomically |
+
+## Core memory parameters
+
+<ParamField path="memory.backend" type="string" default="sqlite">
+  Storage backend. Accepted values: `"sqlite"`, `"lucid"`, `"postgres"`, `"markdown"`, `"none"`.
+</ParamField>
+
+<ParamField path="memory.auto_save" type="boolean" default="true">
+  Persist user-stated conversation inputs to memory. Assistant outputs are excluded to prevent old model-authored summaries from being treated as facts.
+</ParamField>
+
+<ParamField path="memory.embedding_provider" type="string" default="none">
+  Embedding provider for vector search. Accepted values: `"none"`, `"openai"`, `"custom:https://..."`.
+</ParamField>
+
+<ParamField path="memory.embedding_model" type="string" default="text-embedding-3-small">
+  Embedding model ID. Accepts a literal model name or a `hint:<name>` route (see [embedding routing](#embedding-routing)).
+</ParamField>
+
+<ParamField path="memory.embedding_dimensions" type="number" default="1536">
+  Expected vector size for the selected embedding model. Must match the model output dimension.
+</ParamField>
+
+<ParamField path="memory.vector_weight" type="number" default="0.7">
+  Weight for vector similarity in hybrid search. Must be between `0.0` and `1.0`. Pair with `keyword_weight`.
+</ParamField>
+
+<ParamField path="memory.keyword_weight" type="number" default="0.3">
+  Weight for keyword BM25 scoring in hybrid search. Must be between `0.0` and `1.0`.
+</ParamField>
+
+<ParamField path="memory.min_relevance_score" type="number" default="0.4">
+  Minimum hybrid score for a memory entry to be included in context. Memories scoring below this threshold are dropped to prevent irrelevant context bleeding into conversations.
+</ParamField>
+
+## Backends
+
+<Tabs>
+  <Tab title="SQLite (default)">
+
+    SQLite is the default backend. It combines FTS5 full-text search and vector similarity into a single local file with no external services required.
+
+    ```toml
+    [memory]
+    backend = "sqlite"
+    auto_save = true
+    embedding_provider = "none"
+    vector_weight = 0.7
+    keyword_weight = 0.3
+    ```
+
+    To enable semantic vector search, configure an embedding provider:
+
+    ```toml
+    [memory]
+    backend = "sqlite"
+    auto_save = true
+    embedding_provider = "openai"
+    embedding_model = "text-embedding-3-small"
+    embedding_dimensions = 1536
+    vector_weight = 0.7
+    keyword_weight = 0.3
+    ```
+
+    **Optional SQLite tuning:**
+
+    <ParamField path="memory.sqlite_open_timeout_secs" type="number">
+      Maximum seconds to wait when opening the SQLite database file. Useful when the file may be locked by another process. Leave unset for no timeout (the default).
+    </ParamField>
+
+    <ParamField path="memory.embedding_cache_size" type="number" default="10000">
+      Maximum embedding cache entries before LRU eviction.
+    </ParamField>
+
+    <ParamField path="memory.chunk_max_tokens" type="number" default="512">
+      Maximum tokens per chunk for document splitting.
+    </ParamField>
+
+  </Tab>
+
+  <Tab title="PostgreSQL">
+
+    PostgreSQL is configured as a storage-provider override. Set `backend = "sqlite"` (or `"postgres"` as the memory backend) and then point the storage provider at your Postgres instance:
+
+    ```toml
+    [memory]
+    backend = "sqlite"
+    auto_save = true
+    embedding_provider = "none"
+
+    [storage.provider.config]
+    provider = "postgres"
+    db_url = "postgres://user:password@host:5432/zeroclaw"
+    schema = "public"
+    table = "memories"
+    connect_timeout_secs = 15
+    ```
+
+    The `db_url` field also accepts the legacy aliases `dbURL`, `database_url`, and `databaseUrl` for backward compatibility.
+
+    <ParamField path="storage.provider.config.db_url" type="string">
+      PostgreSQL connection string in the format `postgres://user:password@host:port/dbname`.
+    </ParamField>
+
+    <ParamField path="storage.provider.config.schema" type="string" default="public">
+      Database schema for memory tables.
+    </ParamField>
+
+    <ParamField path="storage.provider.config.table" type="string" default="memories">
+      Table name for memory entries.
+    </ParamField>
+
+    <ParamField path="storage.provider.config.connect_timeout_secs" type="number">
+      Optional connection timeout in seconds for the remote database.
+    </ParamField>
+
+  </Tab>
+
+  <Tab title="Lucid">
+
+    Lucid is a bridge to an external memory process. ZeroClaw spawns the Lucid binary and communicates with it over a local protocol.
+
+    ```toml
+    [memory]
+    backend = "lucid"
+    auto_save = true
+    ```
+
+    **Lucid environment variables:**
+
+    | Variable | Default | Purpose |
+    |---|---|---|
+    | `ZEROCLAW_LUCID_CMD` | `lucid` | Path to the Lucid binary |
+    | `ZEROCLAW_LUCID_BUDGET` | `200` | Memory budget (entries) |
+    | `ZEROCLAW_LUCID_LOCAL_HIT_THRESHOLD` | `3` | Local hit count to skip external recall |
+    | `ZEROCLAW_LUCID_RECALL_TIMEOUT_MS` | `120` | Low-latency budget for recall in milliseconds |
+    | `ZEROCLAW_LUCID_STORE_TIMEOUT_MS` | `800` | Async sync timeout for store in milliseconds |
+    | `ZEROCLAW_LUCID_FAILURE_COOLDOWN_MS` | `15000` | Cooldown after a Lucid failure to avoid repeated slow attempts |
+
+  </Tab>
+
+  <Tab title="Markdown">
+
+    The Markdown backend stores memory as plain text files in the workspace. It requires no external services and works well on low-resource systems.
+
+    ```toml
+    [memory]
+    backend = "markdown"
+    auto_save = true
+    ```
+
+    No embedding or vector search is available with the Markdown backend — retrieval is keyword-only.
+
+  </Tab>
+
+  <Tab title="None (disable memory)">
+
+    Set `backend = "none"` to use an explicit no-op backend. The agent will not persist or recall any memory across sessions.
+
+    ```toml
+    [memory]
+    backend = "none"
+    ```
+
+    <Note>
+      `backend = "none"` is the explicit no-op backend, not an absent config. It is different from having no `[memory]` section at all (which defaults to `"sqlite"`).
+    </Note>
+
+  </Tab>
+</Tabs>
+
+## Embedding providers
+
+<ParamField path="memory.embedding_provider" type="string" default="none">
+  Controls the embedding backend used for vector search.
+
+  - `"none"` — disables vector embeddings. Only keyword (BM25) search is used.
+  - `"openai"` — uses OpenAI's embeddings API. Requires `api_key` to be set.
+  - `"custom:https://..."` — any OpenAI-compatible embeddings endpoint.
+</ParamField>
+
+### Custom embedding endpoint
+
+```toml
+[memory]
+backend = "sqlite"
+embedding_provider = "custom:https://embed.example.com/v1"
+embedding_model = "your-embedding-model-id"
+embedding_dimensions = 1024
+```
+
+## Embedding routing
+
+You can route embedding calls to different providers by hint, the same way model routing works. This lets you keep `embedding_model` stable while swapping the underlying provider or model:
+
+```toml
+[memory]
+embedding_model = "hint:semantic"
+
+[[embedding_routes]]
+hint = "semantic"
+provider = "openai"
+model = "text-embedding-3-small"
+dimensions = 1536
+
+[[embedding_routes]]
+hint = "archive"
+provider = "custom:https://embed.example.com/v1"
+model = "your-embedding-model-id"
+dimensions = 1024
+api_key = "optional-per-route-key"
+```
+
+## Memory hygiene and snapshots
+
+ZeroClaw can automatically archive and purge old memory entries and optionally export core memories to a Markdown snapshot file.
+
+<ParamField path="memory.hygiene_enabled" type="boolean" default="true">
+  Run periodic memory hygiene passes (archiving and retention cleanup).
+</ParamField>
+
+<ParamField path="memory.archive_after_days" type="number" default="7">
+  Archive daily and session files older than this many days.
+</ParamField>
+
+<ParamField path="memory.purge_after_days" type="number" default="30">
+  Purge archived files older than this many days.
+</ParamField>
+
+<ParamField path="memory.conversation_retention_days" type="number" default="30">
+  For the SQLite backend, prune conversation rows older than this many days.
+</ParamField>
+
+<ParamField path="memory.snapshot_enabled" type="boolean" default="false">
+  Enable periodic export of core memories to `MEMORY_SNAPSHOT.md`.
+</ParamField>
+
+<ParamField path="memory.snapshot_on_hygiene" type="boolean" default="false">
+  Run a snapshot export during hygiene passes.
+</ParamField>
+
+<ParamField path="memory.auto_hydrate" type="boolean" default="true">
+  Automatically hydrate from `MEMORY_SNAPSHOT.md` when `brain.db` is missing.
+</ParamField>
+
+## Response caching
+
+ZeroClaw can cache LLM responses to avoid paying for duplicate prompts on repeated inputs.
+
+<ParamField path="memory.response_cache_enabled" type="boolean" default="false">
+  Enable LLM response caching.
+</ParamField>
+
+<ParamField path="memory.response_cache_ttl_minutes" type="number" default="60">
+  TTL in minutes for cached responses.
+</ParamField>
+
+<ParamField path="memory.response_cache_max_entries" type="number" default="5000">
+  Maximum number of cached responses before LRU eviction.
+</ParamField>
+
+## Full memory section example
+
+```toml
+[memory]
+backend = "sqlite"
+auto_save = true
+embedding_provider = "openai"
+embedding_model = "text-embedding-3-small"
+embedding_dimensions = 1536
+vector_weight = 0.7
+keyword_weight = 0.3
+min_relevance_score = 0.4
+
+# SQLite options
+sqlite_open_timeout_secs = 30
+embedding_cache_size = 10000
+chunk_max_tokens = 512
+
+# Hygiene
+hygiene_enabled = true
+archive_after_days = 7
+purge_after_days = 30
+conversation_retention_days = 30
+
+# Snapshots
+snapshot_enabled = true
+snapshot_on_hygiene = true
+auto_hydrate = true
+
+# Response cache
+response_cache_enabled = false
+response_cache_ttl_minutes = 60
+response_cache_max_entries = 5000
+```

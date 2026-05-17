@@ -1,0 +1,327 @@
+---
+title: 'Configuring AI model providers and custom endpoints'
+description: 'Every supported provider ID, custom OpenAI-compatible and Anthropic-compatible endpoints, subscription auth profiles, and per-provider TOML examples.'
+---
+
+ZeroClaw resolves the active provider from `default_provider` in `config.toml`, with environment variables able to override it at runtime. You can list all built-in providers and their aliases with `zeroclaw providers`.
+
+## Credential resolution order
+
+For every request the runtime picks credentials in this order:
+
+1. Explicit `api_key` value from `config.toml` or CLI flag
+2. Provider-specific environment variable (for example `OPENROUTER_API_KEY`)
+3. Generic fallbacks: `ZEROCLAW_API_KEY`, then `API_KEY`
+
+When you configure `reliability.fallback_providers`, each fallback provider resolves its credentials independently — the primary provider's key is not reused.
+
+<Note>
+  Environment variable `ZEROCLAW_PROVIDER` always overrides `default_provider` when non-empty. The legacy `PROVIDER` variable is only applied when the config provider is unset or still set to `openrouter`. Use `ZEROCLAW_PROVIDER` whenever you need a clean runtime override.
+</Note>
+
+## Provider catalog
+
+<Tabs>
+  <Tab title="Cloud providers">
+
+| Canonical ID | Aliases | Provider-specific env var |
+|---|---|---|
+| `openrouter` | — | `OPENROUTER_API_KEY` |
+| `anthropic` | — | `ANTHROPIC_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` |
+| `openai` | — | `OPENAI_API_KEY` |
+| `gemini` | `google`, `google-gemini` | `GEMINI_API_KEY`, `GOOGLE_API_KEY` |
+| `xai` | `grok` | `XAI_API_KEY` |
+| `deepseek` | — | `DEEPSEEK_API_KEY` |
+| `mistral` | — | `MISTRAL_API_KEY` |
+| `groq` | — | `GROQ_API_KEY` |
+| `together` | `together-ai` | `TOGETHER_API_KEY` |
+| `fireworks` | `fireworks-ai` | `FIREWORKS_API_KEY` |
+| `perplexity` | — | `PERPLEXITY_API_KEY` |
+| `cohere` | — | `COHERE_API_KEY` |
+| `novita` | — | `NOVITA_API_KEY` |
+| `nvidia` | `nvidia-nim`, `build.nvidia.com` | `NVIDIA_API_KEY` |
+| `vercel` | `vercel-ai` | `VERCEL_API_KEY` |
+| `cloudflare` | `cloudflare-ai` | `CLOUDFLARE_API_KEY` |
+| `bedrock` | `aws-bedrock` | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` |
+| `moonshot` | `kimi` | `MOONSHOT_API_KEY` |
+| `kimi-code` | `kimi_coding`, `kimi_for_coding` | `KIMI_CODE_API_KEY`, `MOONSHOT_API_KEY` |
+| `opencode` | `opencode-zen` | `OPENCODE_API_KEY` |
+| `opencode-go` | — | `OPENCODE_GO_API_KEY` |
+| `zai` | `z.ai` | `ZAI_API_KEY` |
+| `glm` | `zhipu` | `GLM_API_KEY` |
+| `minimax` | `minimax-intl`, `minimax-oauth`, and others | `MINIMAX_OAUTH_TOKEN`, `MINIMAX_API_KEY` |
+| `qianfan` | `baidu` | `QIANFAN_API_KEY` |
+| `doubao` | `volcengine`, `ark`, `doubao-cn` | `ARK_API_KEY`, `DOUBAO_API_KEY` |
+| `qwen` | `dashscope`, `qwen-intl`, `qwen-code`, and others | `QWEN_OAUTH_TOKEN`, `DASHSCOPE_API_KEY` |
+| `venice` | — | `VENICE_API_KEY` |
+| `synthetic` | — | `SYNTHETIC_API_KEY` |
+| `copilot` | `github-copilot` | GitHub token via `API_KEY` fallback |
+
+  </Tab>
+  <Tab title="Local providers">
+
+| Canonical ID | Aliases | Default endpoint | Auth env var |
+|---|---|---|---|
+| `ollama` | — | `http://localhost:11434` | `OLLAMA_API_KEY` (optional) |
+| `llamacpp` | `llama.cpp` | `http://localhost:8080/v1` | `LLAMACPP_API_KEY` (optional) |
+| `vllm` | — | `http://localhost:8000/v1` | `VLLM_API_KEY` (optional) |
+| `osaurus` | — | `http://localhost:1337/v1` | `OSAURUS_API_KEY` (optional) |
+| `sglang` | — | `http://localhost:30000/v1` | `SGLANG_API_KEY` (optional) |
+| `lmstudio` | `lm-studio` | local by default | optional |
+
+  </Tab>
+</Tabs>
+
+## Provider-specific examples
+
+<AccordionGroup>
+  <Accordion title="OpenRouter">
+
+    OpenRouter is the default provider. Set your key and choose any model from the OpenRouter catalog:
+
+    ```toml
+    api_key = "sk-or-..."
+    default_provider = "openrouter"
+    default_model = "anthropic/claude-sonnet-4-6"
+    ```
+
+  </Accordion>
+
+  <Accordion title="Anthropic (direct)">
+
+    ```toml
+    api_key = "sk-ant-..."
+    default_provider = "anthropic"
+    default_model = "claude-sonnet-4-5-20250929"
+    ```
+
+    Anthropic also accepts `ANTHROPIC_OAUTH_TOKEN` for OAuth-based access.
+
+  </Accordion>
+
+  <Accordion title="OpenAI (direct)">
+
+    ```toml
+    api_key = "sk-..."
+    default_provider = "openai"
+    default_model = "gpt-4o"
+    ```
+
+  </Accordion>
+
+  <Accordion title="Ollama (local)">
+
+    For local Ollama, leave `api_url` unset and run `ollama serve`. ZeroClaw connects to `http://localhost:11434` automatically:
+
+    ```toml
+    default_provider = "ollama"
+    default_model = "llama3.2"
+    ```
+
+    You can disable or enable Ollama's built-in reasoning with `[runtime].reasoning_enabled`:
+
+    ```toml
+    [runtime]
+    reasoning_enabled = false   # sends think: false to Ollama
+    ```
+
+  </Accordion>
+
+  <Accordion title="Ollama (remote / Ollama Cloud)">
+
+    For a remote Ollama endpoint, set `api_url` and optionally `api_key`. The `:cloud` suffix on a model ID is normalized before the request:
+
+    ```toml
+    default_provider = "ollama"
+    default_model = "qwen3:cloud"
+    api_url = "https://ollama.com"
+    api_key = "ollama_api_key_here"
+    ```
+
+    <Warning>
+      Using the `:cloud` suffix while `api_url` is local or unset causes a startup validation error. `:cloud` model IDs are only valid with a remote endpoint.
+    </Warning>
+
+  </Accordion>
+
+  <Accordion title="llama.cpp server">
+
+    Start `llama-server` and point ZeroClaw at it:
+
+    ```bash
+    llama-server -hf ggml-org/gpt-oss-20b-GGUF --jinja -c 133000 --host 127.0.0.1 --port 8033
+    ```
+
+    ```toml
+    default_provider = "llamacpp"
+    api_url = "http://127.0.0.1:8033/v1"
+    default_model = "ggml-org/gpt-oss-20b-GGUF"
+    ```
+
+    Set `LLAMACPP_API_KEY` only when `llama-server` was started with `--api-key`. Use `zeroclaw models refresh --provider llamacpp` to populate the local model list.
+
+  </Accordion>
+
+  <Accordion title="vLLM server">
+
+    ```bash
+    vllm serve meta-llama/Llama-3.1-8B-Instruct
+    ```
+
+    ```toml
+    default_provider = "vllm"
+    default_model = "meta-llama/Llama-3.1-8B-Instruct"
+    ```
+
+    The default endpoint is `http://localhost:8000/v1`. Set `VLLM_API_KEY` only when your server requires authentication.
+
+  </Accordion>
+
+  <Accordion title="Osaurus (macOS edge runtime)">
+
+    Osaurus is a unified AI edge runtime for macOS Apple Silicon that combines local MLX inference with cloud provider proxying through a single endpoint:
+
+    ```toml
+    default_provider = "osaurus"
+    default_model = "qwen3-30b-a3b-8bit"
+    ```
+
+    The default endpoint is `http://localhost:1337/v1`. The API key defaults to `"osaurus"` and is optional.
+
+  </Accordion>
+
+  <Accordion title="Google Gemini">
+
+    ```toml
+    api_key = "AIza..."
+    default_provider = "gemini"
+    default_model = "gemini-2.0-flash"
+    ```
+
+    Auth can come from `GEMINI_API_KEY`, `GOOGLE_API_KEY`, or a cached Gemini CLI OAuth token at `~/.gemini/oauth_creds.json`. Thinking models such as `gemini-3-pro-preview` are supported — internal reasoning parts are automatically filtered from the response.
+
+  </Accordion>
+
+  <Accordion title="AWS Bedrock">
+
+    Bedrock uses AKSK authentication instead of a single API key:
+
+    ```toml
+    default_provider = "bedrock"
+    default_model = "anthropic.claude-sonnet-4-5-20250929-v1:0"
+    ```
+
+    Set `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in your environment. Use `AWS_SESSION_TOKEN` for temporary STS credentials and `AWS_REGION` to override the default `us-east-1`.
+
+  </Accordion>
+
+  <Accordion title="MiniMax OAuth">
+
+    ```toml
+    default_provider = "minimax-oauth"
+    api_key = "minimax-oauth"
+    ```
+
+    Then provide credentials via environment variables:
+
+    - `MINIMAX_OAUTH_TOKEN` (preferred direct access token)
+    - `MINIMAX_OAUTH_REFRESH_TOKEN` (auto-refreshes on startup)
+    - `MINIMAX_API_KEY` (legacy static token)
+
+  </Accordion>
+
+  <Accordion title="Qwen Code OAuth">
+
+    ```toml
+    default_provider = "qwen-code"
+    api_key = "qwen-oauth"
+    ```
+
+    Credentials are resolved from `QWEN_OAUTH_TOKEN`, then `~/.qwen/oauth_creds.json`, then `QWEN_OAUTH_REFRESH_TOKEN`, and finally `DASHSCOPE_API_KEY` as a fallback.
+
+  </Accordion>
+</AccordionGroup>
+
+## Custom endpoints
+
+ZeroClaw supports arbitrary OpenAI-compatible and Anthropic-compatible base URLs as first-class provider IDs. Pass the full base URL as a URI-encoded suffix:
+
+<CodeGroup>
+
+```toml OpenAI-compatible
+default_provider = "custom:https://your-api.example.com"
+api_key = "your-key"
+default_model = "your-model-id"
+```
+
+```toml Anthropic-compatible
+default_provider = "anthropic-custom:https://your-api.example.com"
+api_key = "your-key"
+default_model = "your-model-id"
+```
+
+</CodeGroup>
+
+## Subscription auth (OpenAI Codex / Claude Code)
+
+ZeroClaw supports OAuth-based subscription auth profiles stored encrypted at `~/.zeroclaw/auth-profiles.json`. Profile IDs use the format `<provider>:<profile_name>` — for example `openai-codex:work`.
+
+<Steps>
+  <Step title="Log in with device-code flow (headless servers)">
+    ```bash
+    zeroclaw auth login --provider openai-codex --device-code
+    ```
+  </Step>
+  <Step title="Or use browser callback flow with paste fallback">
+    ```bash
+    zeroclaw auth login --provider openai-codex --profile default
+    zeroclaw auth paste-redirect --provider openai-codex --profile default
+    ```
+  </Step>
+  <Step title="For Anthropic, paste a setup token">
+    ```bash
+    zeroclaw auth paste-token --provider anthropic --profile default --auth-kind authorization
+    ```
+  </Step>
+  <Step title="Run the agent with a specific profile">
+    ```bash
+    zeroclaw agent --provider openai-codex --auth-profile openai-codex:work -m "hello"
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  Anthropic updated their Authentication and Credential Use terms on 2026-02-19. Claude Code OAuth tokens (Free, Pro, Max) are intended exclusively for Claude Code and Claude.ai — using them in other tools may violate the Consumer Terms of Service. Check the official terms before using subscription auth.
+</Warning>
+
+## Auth profile format
+
+<ParamField path="model_providers.<name>.name" type="string">
+  Optional provider type or profile ID override (for example `"openai"`, `"openai-codex"`, or a custom profile name).
+</ParamField>
+
+<ParamField path="model_providers.<name>.base_url" type="string">
+  Optional base URL for OpenAI-compatible endpoints when using a named provider profile.
+</ParamField>
+
+<ParamField path="model_providers.<name>.requires_openai_auth" type="boolean" default="false">
+  When true, the runtime loads OpenAI auth material from `OPENAI_API_KEY` or `~/.codex/auth.json`.
+</ParamField>
+
+## Model routing with hints
+
+You can keep call sites stable while swapping underlying models by defining named routes. Set `default_model = "hint:reasoning"` or pass `hint:fast` from any integration:
+
+```toml
+[[model_routes]]
+hint = "reasoning"
+provider = "openrouter"
+model = "anthropic/claude-opus-4-20250514"
+
+[[model_routes]]
+hint = "fast"
+provider = "groq"
+model = "llama-3.3-70b-versatile"
+```
+
+When a provider deprecates a model ID, update only the `model` field in the route — nothing else in your config or integrations needs to change.

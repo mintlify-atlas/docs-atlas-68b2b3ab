@@ -1,0 +1,441 @@
+---
+title: 'Setting up and configuring ZeroClaw messaging channels'
+description: 'Configure Telegram, Discord, Slack, WhatsApp, Matrix, Signal, and every other supported channel with allowlists, bot tokens, and startup commands.'
+---
+
+ZeroClaw can receive and send messages through any combination of channels. Every channel is configured under the `[channels_config]` namespace in `~/.zeroclaw/config.toml`. Channels are opt-in — adding a sub-table enables that channel; omitting it leaves it disabled.
+
+## Allowlist semantics
+
+All channels enforce a deny-by-default sender policy. The allowlist field name varies by channel, but the rules are the same everywhere:
+
+- **Empty list** (`[]`) — deny all inbound messages. Use this for safe default startup.
+- **`"*"`** — allow all senders. Use this only for temporary open testing, then tighten to explicit IDs.
+- **Explicit list** — allow only the listed sender IDs or identifiers.
+
+<Warning>
+  Using `"*"` in production means any user who discovers your bot can send it commands. Always replace it with explicit user IDs after verifying your setup works.
+</Warning>
+
+## Starting channels
+
+<Tabs>
+  <Tab title="Foreground (single channel)">
+    ```bash
+    zeroclaw channel start
+    ```
+    Starts all configured channels and blocks in the foreground. Useful for testing.
+  </Tab>
+  <Tab title="Daemon (all channels)">
+    ```bash
+    zeroclaw daemon
+    ```
+    Starts all configured channels along with the gateway, scheduler, and heartbeat in a single supervised long-running process.
+  </Tab>
+  <Tab title="Background service">
+    ```bash
+    zeroclaw service install
+    zeroclaw service start
+    zeroclaw service status
+    ```
+    Installs and manages ZeroClaw as a systemd user-level service (Linux) or OpenRC system service (Alpine).
+  </Tab>
+</Tabs>
+
+## Delivery modes at a glance
+
+| Channel | How it receives messages | Public inbound port required? |
+|---|---|---|
+| CLI | local stdin/stdout | No |
+| Telegram | polling | No |
+| Discord | gateway/websocket | No |
+| Slack | events API | No |
+| Mattermost | polling | No |
+| Matrix | sync API (supports E2EE) | No |
+| Signal | signal-cli HTTP bridge | No |
+| WhatsApp Cloud API | webhook (`/whatsapp`) | Yes |
+| WhatsApp Web | websocket | No |
+| Email | IMAP polling + SMTP | No |
+| IRC | IRC socket | No |
+| Lark / Feishu | websocket or webhook | Webhook mode only |
+| DingTalk | stream mode | No |
+| QQ | bot gateway | No |
+| Nostr | relay websocket (NIP-04 / NIP-17) | No |
+| iMessage | local AppleScript bridge | No |
+| Webhook | gateway endpoint (`/webhook`) | Usually yes |
+
+## Per-channel setup
+
+<AccordionGroup>
+
+  <Accordion title="CLI">
+
+    The CLI channel is enabled by default. It provides the interactive `zeroclaw agent` mode and uses local stdin/stdout.
+
+    ```toml
+    [channels_config]
+    cli = true
+    ```
+
+  </Accordion>
+
+  <Accordion title="Telegram">
+
+    <Steps>
+      <Step title="Create a bot with @BotFather">
+        Send `/newbot` to [@BotFather](https://t.me/BotFather) on Telegram and copy the token it gives you.
+      </Step>
+      <Step title="Add the bot token to config.toml">
+        ```toml
+        [channels_config.telegram]
+        bot_token = "123456:telegram-token"
+        allowed_users = []          # deny all until you bind your identity
+        stream_mode = "off"         # "off" or "partial" for live-streaming edits
+        draft_update_interval_ms = 1000
+        mention_only = false
+        interrupt_on_new_message = false
+        ```
+      </Step>
+      <Step title="Start the daemon and bind your identity">
+        Start `zeroclaw daemon`, then send any message to the bot. You will see a log warning with a command like:
+        ```bash
+        zeroclaw channel bind-telegram 123456789
+        ```
+        Run that command to add your numeric Telegram user ID to the allowlist, then send a message again.
+      </Step>
+    </Steps>
+
+    <Tip>
+      `interrupt_on_new_message = true` lets a newer message from the same sender in the same chat cancel the in-flight response and start fresh, while preserving the interrupted user turn in conversation history.
+    </Tip>
+
+    The `allowed_users` field accepts Telegram usernames (without `@`) and numeric user IDs. You can also run the bind command directly for any known ID:
+
+    ```bash
+    zeroclaw channel bind-telegram 123456789
+    ```
+
+  </Accordion>
+
+  <Accordion title="Discord">
+
+    <Steps>
+      <Step title="Create a bot in the Discord Developer Portal">
+        Go to the [Discord Developer Portal](https://discord.com/developers/applications), create an application, add a Bot, enable the **Message Content** intent, and copy the bot token.
+      </Step>
+      <Step title="Invite the bot to your server">
+        Use the OAuth2 URL generator with the `bot` scope and `Send Messages` + `Read Message History` permissions.
+      </Step>
+      <Step title="Configure config.toml">
+        ```toml
+        [channels_config.discord]
+        bot_token = "discord-bot-token"
+        guild_id = "123456789012345678"   # optional: restrict to one server
+        allowed_users = ["your-discord-user-id"]
+        listen_to_bots = false
+        mention_only = false
+        ```
+      </Step>
+    </Steps>
+
+    `allowed_users` accepts Discord numeric user IDs. Set `mention_only = true` to require `@bot` mentions in servers.
+
+  </Accordion>
+
+  <Accordion title="Slack">
+
+    ```toml
+    [channels_config.slack]
+    bot_token = "xoxb-..."
+    app_token = "xapp-..."             # optional, for Socket Mode
+    channel_id = "C1234567890"         # optional: single channel; omit for all channels
+    allowed_users = ["U0123456789"]
+    ```
+
+    Omit `channel_id` (or set it to `"*"`) to auto-discover and listen across all accessible channels.
+
+  </Accordion>
+
+  <Accordion title="Mattermost">
+
+    ```toml
+    [channels_config.mattermost]
+    url = "https://mm.example.com"
+    bot_token = "mattermost-token"
+    channel_id = "channel-id"
+    allowed_users = ["*"]
+    ```
+
+  </Accordion>
+
+  <Accordion title="Matrix">
+
+    ```toml
+    [channels_config.matrix]
+    homeserver = "https://matrix.example.com"
+    access_token = "syt_..."
+    user_id = "@zeroclaw:matrix.example.com"    # recommended for E2EE
+    device_id = "DEVICEID123"                   # recommended for E2EE
+    room_id = "!room:matrix.example.com"        # or alias: #ops:matrix.example.com
+    allowed_users = ["*"]
+    ```
+
+    <Note>
+      Matrix and Lark require compile-time feature flags (`channel-matrix`, `channel-lark`). Default builds do not include them. Build with `cargo build --features channel-matrix` to enable Matrix support.
+    </Note>
+
+    If the bot connects but never replies, the most common causes are: `allowed_users` does not include the sender, the bot is not joined to the configured room, or end-to-end encryption device keys have not been shared to the bot device.
+
+  </Accordion>
+
+  <Accordion title="Signal">
+
+    Signal requires a running [signal-cli](https://github.com/AsamK/signal-cli) HTTP bridge:
+
+    ```toml
+    [channels_config.signal]
+    http_url = "http://127.0.0.1:8686"
+    account = "+1234567890"
+    group_id = "dm"                    # "dm", a group ID, or omit
+    allowed_from = ["*"]
+    ignore_attachments = false
+    ignore_stories = true
+    ```
+
+  </Accordion>
+
+  <Accordion title="WhatsApp — Cloud API mode">
+
+    Cloud API mode uses Meta's official webhook flow. It requires a public HTTPS callback URL.
+
+    <Steps>
+      <Step title="Create a Meta Business App">
+        Go to [developers.facebook.com](https://developers.facebook.com), create a Business app, add the WhatsApp product, and collect your access token and phone number ID.
+      </Step>
+      <Step title="Configure config.toml">
+        ```toml
+        [channels_config.whatsapp]
+        access_token = "EAAB..."
+        phone_number_id = "123456789012345"
+        verify_token = "your-verify-token"
+        app_secret = "your-app-secret"    # optional but recommended for signature verification
+        allowed_numbers = ["+1234567890"]  # E.164 format, or ["*"]
+        ```
+      </Step>
+      <Step title="Start the gateway with a tunnel">
+        ```bash
+        zeroclaw gateway --port 42617
+        ```
+        WhatsApp requires HTTPS, so you need an active tunnel (ngrok, Cloudflare, Tailscale Funnel).
+      </Step>
+      <Step title="Register the webhook in the Meta Developer Console">
+        Set the callback URL to `https://your-tunnel-url/whatsapp` and the verify token to match your config. Subscribe to the `messages` field.
+      </Step>
+    </Steps>
+
+  </Accordion>
+
+  <Accordion title="WhatsApp — Web mode">
+
+    Web mode links ZeroClaw to your personal WhatsApp account without a Meta Business API. It requires the `whatsapp-web` feature flag at build time.
+
+    ```bash
+    cargo build --features whatsapp-web
+    ```
+
+    ```toml
+    [channels_config.whatsapp]
+    session_path = "~/.zeroclaw/state/whatsapp-web/session.db"
+    pair_phone = "15551234567"         # optional; omit to use QR code flow
+    pair_code = ""                     # optional custom pair code
+    allowed_numbers = ["+1234567890"]
+    ```
+
+    Start `zeroclaw daemon` and follow the pairing output in the terminal. On your phone, go to **Settings → Linked Devices** to complete the link. Keep `session_path` on persistent storage to avoid relinking after restarts.
+
+    <Note>
+      If both Cloud API and Web fields are present in `[channels_config.whatsapp]`, Cloud API mode takes priority for backward compatibility.
+    </Note>
+
+  </Accordion>
+
+  <Accordion title="Email">
+
+    ```toml
+    [channels_config.email]
+    imap_host = "imap.example.com"
+    imap_port = 993
+    imap_folder = "INBOX"
+    smtp_host = "smtp.example.com"
+    smtp_port = 465
+    smtp_tls = true
+    username = "bot@example.com"
+    password = "email-password"
+    from_address = "bot@example.com"
+    poll_interval_secs = 60
+    allowed_senders = ["trusted@example.com"]
+    ```
+
+  </Accordion>
+
+  <Accordion title="IRC">
+
+    ```toml
+    [channels_config.irc]
+    server = "irc.libera.chat"
+    port = 6697
+    nickname = "zeroclaw-bot"
+    username = "zeroclaw"
+    channels = ["#zeroclaw"]
+    allowed_users = ["*"]
+    verify_tls = true
+    server_password = ""
+    nickserv_password = ""
+    sasl_password = ""
+    ```
+
+  </Accordion>
+
+  <Accordion title="Lark / Feishu">
+
+    Both Lark and Feishu share the same connection structure. Use `[channels_config.lark]` for Lark and `[channels_config.feishu]` for Feishu.
+
+    <CodeGroup>
+
+    ```toml Lark
+    [channels_config.lark]
+    app_id = "cli_xxx"
+    app_secret = "xxx"
+    encrypt_key = ""
+    verification_token = ""
+    allowed_users = ["*"]
+    mention_only = false
+    receive_mode = "websocket"   # or "webhook"
+    port = 8081                  # required for webhook mode
+    ```
+
+    ```toml Feishu
+    [channels_config.feishu]
+    app_id = "cli_xxx"
+    app_secret = "xxx"
+    encrypt_key = ""
+    verification_token = ""
+    allowed_users = ["*"]
+    receive_mode = "websocket"
+    port = 8081
+    ```
+
+    </CodeGroup>
+
+    <Note>
+      Lark requires the `channel-lark` compile-time feature. Build with `cargo build --features channel-lark`.
+    </Note>
+
+  </Accordion>
+
+  <Accordion title="DingTalk">
+
+    ```toml
+    [channels_config.dingtalk]
+    client_id = "ding-app-key"
+    client_secret = "ding-app-secret"
+    allowed_users = ["*"]
+    ```
+
+  </Accordion>
+
+  <Accordion title="QQ">
+
+    ```toml
+    [channels_config.qq]
+    app_id = "qq-app-id"
+    app_secret = "qq-app-secret"
+    allowed_users = ["*"]
+    ```
+
+  </Accordion>
+
+  <Accordion title="Nostr">
+
+    ```toml
+    [channels_config.nostr]
+    private_key = "nsec1..."                   # hex or nsec bech32, encrypted at rest
+    # relays = ["wss://relay.damus.io", "wss://nos.lol"]
+    # defaults: relay.damus.io, nos.lol, relay.primal.net, relay.snort.social
+    allowed_pubkeys = ["hex-or-npub-pubkey"]   # empty = deny all, "*" = allow all
+    ```
+
+    Nostr supports both NIP-04 (legacy encrypted DMs) and NIP-17 (gift-wrapped private messages). Replies automatically use the same protocol the sender used. The private key is encrypted at rest when `secrets.encrypt = true` (the default).
+
+  </Accordion>
+
+  <Accordion title="iMessage">
+
+    iMessage uses a local AppleScript bridge and is only available on macOS:
+
+    ```toml
+    [channels_config.imessage]
+    allowed_contacts = ["*"]
+    ```
+
+  </Accordion>
+
+  <Accordion title="Webhook (gateway endpoint)">
+
+    The webhook channel activates the `POST /webhook` gateway endpoint:
+
+    ```toml
+    [channels_config.webhook]
+    port = 8080
+    secret = "optional-shared-secret"
+    ```
+
+    The gateway also exposes `GET /health` (always public) and `POST /pair` for exchanging a one-time pairing code for a bearer token. All `/webhook` requests require `Authorization: Bearer <token>`.
+
+  </Accordion>
+
+</AccordionGroup>
+
+## In-chat runtime commands
+
+When ZeroClaw is running in channel mode, Telegram and Discord support these runtime commands from allowed senders:
+
+| Command | Effect |
+|---|---|
+| `/models` | Show available providers and current selection |
+| `/models <provider>` | Switch provider for the current sender session |
+| `/model` | Show current model |
+| `/model <model-id>` | Switch model for the current sender session |
+| `/new` | Clear conversation history and start a fresh session |
+
+Model or provider switches clear only that sender's in-memory conversation history to prevent cross-model context contamination.
+
+## Global channel options
+
+<ParamField path="channels_config.message_timeout_secs" type="number" default="300">
+  Base timeout in seconds for processing a single channel message (LLM turn plus all tool calls). The runtime scales this by up to 4x with tool-loop depth to avoid false timeouts on slow local models. Values below 30 are clamped to 30. For cloud providers (OpenAI, Anthropic), you can reduce this to 60 or lower.
+</ParamField>
+
+## Validation workflow
+
+<Steps>
+  <Step title="Configure one channel with an open allowlist">
+    Set `allowed_users = ["*"]` (or the equivalent field) for initial testing.
+  </Step>
+  <Step title="Start the daemon">
+    ```bash
+    zeroclaw daemon
+    ```
+  </Step>
+  <Step title="Send a test message">
+    Send a message from an expected sender and confirm the agent replies.
+  </Step>
+  <Step title="Tighten the allowlist">
+    Replace `"*"` with your explicit user IDs.
+  </Step>
+  <Step title="Check channel health">
+    ```bash
+    zeroclaw channel doctor
+    ```
+  </Step>
+</Steps>

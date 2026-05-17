@@ -1,0 +1,303 @@
+---
+title: "Hardware peripherals: STM32, Raspberry Pi, and USB"
+description: "Connect STM32 Nucleo and Raspberry Pi GPIO to ZeroClaw, use probe-rs for memory introspection, and implement the Peripheral trait for custom hardware boards."
+---
+
+ZeroClaw's hardware subsystem lets the agent directly control microcontrollers and SBCs by exposing each board's capabilities as tools (`gpio_read`, `gpio_write`, `adc_read`, and more). The connection between ZeroClaw and a peripheral follows a defined `Peripheral` trait so new boards can be added without changing the agent loop.
+
+## Two modes of operation
+
+### Edge-native (standalone)
+
+ZeroClaw runs **directly on the device** (ESP32, Raspberry Pi). The runtime spins up a local gRPC/nanoRPC server and communicates with peripherals over GPIO, I2C, and SPI. No host is required.
+
+**Workflow:**
+1. User sends a message: *"Turn on LED on pin 13"*
+2. ZeroClaw fetches board-specific docs from the local datasheet index (RAG pipeline)
+3. LLM synthesizes the action using retrieved register maps and pinout data
+4. GPIO is toggled; result returned to the user
+5. Optimized code is persisted for future identical requests
+
+### Host-mediated (development and debugging)
+
+ZeroClaw runs on a **host machine** (macOS, Linux) and controls the target over USB, J-Link, or Aardvark. This is the standard path for STM32 Nucleo and other MCUs without WiFi.
+
+**Workflow:**
+1. User asks: *"What readable memory addresses are on this USB device?"*
+2. ZeroClaw identifies the connected hardware via VID/PID
+3. Performs memory mapping and returns available address spaces
+4. User can then flash firmware or issue GPIO commands
+
+| Aspect | Edge-native | Host-mediated |
+|---|---|---|
+| ZeroClaw runs on | Device (ESP32, RPi) | Host (Mac, Linux) |
+| Hardware link | Local (GPIO, I2C, SPI) | USB, J-Link, Aardvark |
+| Use case | Production, standalone | Dev, debug, introspection |
+
+---
+
+## STM32 Nucleo-F401RE setup
+
+The Nucleo-F401RE ships with a built-in ST-Link debugger over USB, so no separate debug probe is needed. ZeroClaw includes Embassy-based firmware (`firmware/nucleo/`) and a `flash-nucleo` subcommand that builds and flashes it in one step.
+
+### Prerequisites
+
+- Nucleo-F401RE board with USB-A to Mini-USB cable
+- `probe-rs` CLI for flashing: `cargo install probe-rs-tools --locked`
+
+<Note>
+The `probe-rs` *crate* is a library; the CLI tools are in `probe-rs-tools`. Install `probe-rs-tools`, not `probe-rs`.
+</Note>
+
+### Flashing firmware
+
+<Steps>
+  <Step title="Connect the Nucleo">
+    Connect the board to your Mac or Linux host via USB. The ST-Link appears as a USB device; no additional driver is needed on modern systems.
+  </Step>
+
+  <Step title="Flash via ZeroClaw">
+    From the repository root:
+
+    ```bash
+    zeroclaw peripheral flash-nucleo
+    ```
+
+    This builds `firmware/nucleo` targeting `thumbv7em-none-eabihf` and runs `probe-rs run --chip STM32F401RETx`. The firmware starts immediately after flashing.
+
+    <Note>
+    `flash-nucleo` is available in repo builds only, not in crates.io installs. If you installed from crates.io, build from source: `cargo run --features hardware -- peripheral flash-nucleo`
+    </Note>
+  </Step>
+
+  <Step title="Manual flash (alternative)">
+    ```bash
+    cargo build --release --target thumbv7em-none-eabihf
+    probe-rs run --chip STM32F401RETx target/thumbv7em-none-eabihf/release/nucleo
+    ```
+  </Step>
+
+  <Step title="Find the serial port">
+    <Tabs>
+      <Tab title="macOS">
+        ```bash
+        ls /dev/cu.usbmodem*
+        # e.g. /dev/cu.usbmodem101
+        ```
+      </Tab>
+      <Tab title="Linux">
+        ```bash
+        dmesg | grep tty
+        # typically /dev/ttyACM0
+        ```
+
+        If you see permission errors, add your user to the `dialout` group:
+
+        ```bash
+        sudo usermod -a -G dialout $USER
+        # Log out and back in for the change to take effect
+        ```
+      </Tab>
+    </Tabs>
+
+    USART2 (PA2/PA3) is bridged through the ST-Link's virtual COM port, so only one serial device appears on the host.
+  </Step>
+
+  <Step title="Configure ZeroClaw">
+    Add the board to `~/.zeroclaw/config.toml`:
+
+    ```toml
+    [peripherals]
+    enabled = true
+
+    [[peripherals.boards]]
+    board = "nucleo-f401re"
+    transport = "serial"
+    path = "/dev/cu.usbmodem101"   # adjust to your port
+    baud = 115200
+    ```
+  </Step>
+
+  <Step title="Run and test">
+    Start the daemon:
+
+    ```bash
+    zeroclaw daemon --host 127.0.0.1 --port 42617
+    ```
+
+    Or send a command directly to the agent:
+
+    ```bash
+    zeroclaw agent --message "Turn on the LED on pin 13"
+    ```
+
+    Pin 13 maps to PA5, which is the User LED (LD2) on the Nucleo-F401RE.
+  </Step>
+</Steps>
+
+### What's included for Nucleo-F401RE
+
+| Component | Location | Purpose |
+|---|---|---|
+| Firmware | `firmware/nucleo/` | Embassy Rust — USART2 at 115200 baud, `gpio_read`, `gpio_write` |
+| Serial peripheral | `src/peripherals/serial.rs` | JSON-over-serial protocol (shared with Arduino and ESP32) |
+| Flash command | `zeroclaw peripheral flash-nucleo` | Builds firmware and flashes via probe-rs |
+
+### Serial protocol
+
+Communication between ZeroClaw and the firmware uses newline-delimited JSON:
+
+<CodeGroup>
+
+```json request
+{"id":"1","cmd":"gpio_write","args":{"pin":13,"value":1}}
+```
+
+```json response
+{"id":"1","ok":true,"result":"done"}
+```
+
+</CodeGroup>
+
+### Board info without flashing
+
+ZeroClaw can read chip information over USB without any firmware on the board. From the CLI:
+
+```bash
+cargo build --features hardware,probe
+zeroclaw hardware info
+zeroclaw hardware discover
+```
+
+Or via the Telegram bot, send: *"What board info do I have?"* — the agent uses `hardware_board_info` to return chip name, architecture, and memory map. With the `probe` feature enabled it reads live data via USB/SWD; without it, it returns static datasheet information.
+
+---
+
+## Raspberry Pi GPIO
+
+ZeroClaw runs natively on Raspberry Pi and accesses GPIO through [rppal](https://github.com/golemparts/rppal) or sysfs. No separate firmware is needed.
+
+### Build with RPi GPIO support
+
+```bash
+cargo build --release --features hardware,peripheral-rpi
+```
+
+### Configuration
+
+```toml
+[peripherals]
+enabled = true
+
+[[peripherals.boards]]
+board = "rpi-gpio"
+transport = "native"
+```
+
+With this configuration the agent exposes `gpio_read` and `gpio_write` tools over the Pi's physical pins.
+
+---
+
+## USB device discovery
+
+ZeroClaw uses [nusb](https://github.com/nic-hartley/nusb) for USB enumeration. It maps VID/PID to known boards (architecture, name, transport) via a built-in registry.
+
+```bash
+# List all connected USB devices with VID/PID and matched board name
+zeroclaw hardware discover
+
+# Inspect a specific device for memory map and peripheral list
+zeroclaw hardware introspect /dev/ttyACM0
+```
+
+<Warning>
+USB discovery via `nusb` is not available when ZeroClaw is running on Android (`target_os = "android"`). Run discovery from a macOS or Linux host instead.
+</Warning>
+
+---
+
+## probe-rs memory introspection
+
+With the `probe` feature, ZeroClaw can read live chip data over USB/SWD using [probe-rs](https://probe.rs/):
+
+```bash
+cargo build --features hardware,probe
+zeroclaw hardware info        # chip name, architecture, memory map
+zeroclaw hardware introspect  # full peripheral and register list
+```
+
+The `hardware_board_info` agent tool uses probe-rs when the feature is present, falling back to static datasheet data otherwise.
+
+---
+
+## Serial port peripheral (tokio-serial)
+
+Serial communication for all boards (STM32, ESP32, Arduino) is handled by `src/peripherals/serial.rs` using [tokio-serial](https://github.com/berkowski/tokio-serial). The same JSON-over-serial protocol works across all supported boards — only the `board` value in config changes.
+
+---
+
+## Peripheral trait: extension points
+
+To add a new board, implement `Peripheral` from `src/peripherals/traits.rs`:
+
+```rust
+#[async_trait]
+pub trait Peripheral: Send + Sync {
+    fn name(&self) -> &str;
+    fn board_type(&self) -> &str;
+    async fn connect(&mut self) -> anyhow::Result<()>;
+    async fn disconnect(&mut self) -> anyhow::Result<()>;
+    async fn health_check(&self) -> bool;
+    fn tools(&self) -> Vec<Box<dyn Tool>>;
+}
+```
+
+**Startup flow:**
+
+1. ZeroClaw reads `peripherals.boards` from config
+2. Creates a `Peripheral` impl for each board and calls `connect()`
+3. Collects all tools from connected peripherals and merges them with the default tool set
+4. The agent loop calls `gpio_write`, `sensor_read`, etc. — these delegate to the peripheral impl
+5. On shutdown, `disconnect()` is called on each peripheral
+
+See `docs/contributing/adding-boards-and-tools.md` in the repository for the step-by-step guide on registering new boards and datasheets.
+
+---
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title='"flash-nucleo" subcommand not recognized'>
+    This command is only available in repo builds. Build from source:
+
+    ```bash
+    cargo run --features hardware -- peripheral flash-nucleo
+    ```
+  </Accordion>
+
+  <Accordion title='"probe-rs not found"'>
+    Install the CLI tools crate (not the library):
+
+    ```bash
+    cargo install probe-rs-tools --locked
+    ```
+  </Accordion>
+
+  <Accordion title='"No probe detected"'>
+    Ensure the Nucleo is connected and try a different USB cable or port. The board must be powered (the ST-Link LED should be on).
+  </Accordion>
+
+  <Accordion title='"Serial port not found" on Linux'>
+    Add your user to the `dialout` group, then log out and back in:
+
+    ```bash
+    sudo usermod -a -G dialout $USER
+    ```
+
+    Verify with `zeroclaw peripheral list` after reconnecting.
+  </Accordion>
+
+  <Accordion title='"GPIO commands ignored"'>
+    Check that the `path` in `config.toml` matches your actual serial port. Run `zeroclaw peripheral list` to see what ZeroClaw has detected.
+  </Accordion>
+</AccordionGroup>

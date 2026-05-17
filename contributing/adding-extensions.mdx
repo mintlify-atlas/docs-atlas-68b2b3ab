@@ -1,0 +1,400 @@
+---
+title: "Adding providers, channels, tools, and peripherals"
+description: "Implement ZeroClaw extension traits — Provider, Channel, Tool, Memory, Peripheral — with source-accurate Rust signatures and factory registration checklists."
+---
+
+ZeroClaw's extension points all follow the same pattern: implement a trait, register the implementation in the module's factory function, add any required config keys to the schema, and write tests. The trait definitions are the source of truth — if any example here conflicts with a trait file, the trait file wins.
+
+<Note>
+Trait definitions live in `src/*/traits.rs`. Read the trait file before starting an implementation.
+</Note>
+
+## Adding a Provider
+
+Providers are LLM backend adapters that connect ZeroClaw to a model API.
+
+**Required method:** `chat_with_system`. All other methods have default implementations.
+
+```rust
+// src/providers/traits.rs — required method signature
+async fn chat_with_system(
+    &self,
+    system_prompt: Option<&str>,
+    message: &str,
+    model: &str,
+    temperature: f64,
+) -> Result<String>;
+
+// Default implementations provided:
+// simple_chat()          — delegates to chat_with_system with no system prompt
+// chat_with_history()    — delegates to chat_with_system with history serialised
+// capabilities()         — returns no native tool-calling by default
+// streaming methods      — return empty/error streams by default
+```
+
+**Example — Ollama local provider:**
+
+```rust
+use anyhow::Result;
+use async_trait::async_trait;
+
+pub struct OllamaProvider {
+    base_url: String,
+    client: reqwest::Client,
+}
+
+impl OllamaProvider {
+    pub fn new(base_url: Option<&str>) -> Self {
+        Self {
+            base_url: base_url.unwrap_or("http://localhost:11434").to_string(),
+            client: reqwest::Client::new(),
+        }
+    }
+}
+
+#[async_trait]
+impl Provider for OllamaProvider {
+    async fn chat_with_system(
+        &self,
+        system_prompt: Option<&str>,
+        message: &str,
+        model: &str,
+        temperature: f64,
+    ) -> Result<String> {
+        let url = format!("{}/api/generate", self.base_url);
+
+        let mut body = serde_json::json!({
+            "model": model,
+            "prompt": message,
+            "temperature": temperature,
+            "stream": false,
+        });
+
+        if let Some(system) = system_prompt {
+            body["system"] = serde_json::Value::String(system.to_string());
+        }
+
+        let resp = self
+            .client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await?
+            .json::<serde_json::Value>()
+            .await?;
+
+        resp["response"]
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| anyhow::anyhow!("No response field in Ollama reply"))
+    }
+}
+```
+
+**Checklist:**
+
+<Steps>
+  <Step title="Implement the Provider trait">
+    Create your file in `src/providers/`. Implement `chat_with_system`.
+  </Step>
+  <Step title="Register in the factory">
+    Add a match arm in `src/providers/mod.rs` so the provider can be selected by name from config.
+  </Step>
+  <Step title="Write tests">
+    Add focused tests for factory wiring and error paths (network failure, malformed response).
+  </Step>
+  <Step title="Avoid behaviour leaks">
+    Do not let provider-specific behaviour bleed into shared orchestration code.
+  </Step>
+</Steps>
+
+---
+
+## Adding a Channel
+
+Channels let ZeroClaw communicate through any messaging platform.
+
+**Required methods:** `name()`, `send()`, `listen()`. All other methods have default implementations.
+
+```rust
+// src/channels/traits.rs — required method signatures
+fn name(&self) -> &str;
+async fn send(&self, message: &SendMessage) -> Result<()>;
+async fn listen(&self, tx: mpsc::Sender<ChannelMessage>) -> Result<()>;
+
+// Default implementations provided:
+// health_check()    — returns true
+// start_typing()    — no-op
+// stop_typing()     — no-op
+// send_draft()      — no-op
+// update_draft()    — no-op
+// finalize_draft()  — no-op
+// cancel_draft()    — no-op
+// add_reaction()    — no-op
+// remove_reaction() — no-op
+```
+
+**Example — Telegram channel:**
+
+```rust
+use anyhow::Result;
+use async_trait::async_trait;
+use tokio::sync::mpsc;
+
+pub struct TelegramChannel {
+    bot_token: String,
+    allowed_users: Vec<String>,
+    client: reqwest::Client,
+}
+
+impl TelegramChannel {
+    pub fn new(bot_token: &str, allowed_users: Vec<String>) -> Self {
+        Self {
+            bot_token: bot_token.to_string(),
+            allowed_users,
+            client: reqwest::Client::new(),
+        }
+    }
+
+    fn api_url(&self, method: &str) -> String {
+        format!("https://api.telegram.org/bot{}/{method}", self.bot_token)
+    }
+}
+
+#[async_trait]
+impl Channel for TelegramChannel {
+    fn name(&self) -> &str { "telegram" }
+
+    async fn send(&self, message: &SendMessage) -> Result<()> {
+        self.client
+            .post(self.api_url("sendMessage"))
+            .json(&serde_json::json!({
+                "chat_id": message.recipient,
+                "text": message.content,
+                "parse_mode": "Markdown",
+            }))
+            .send()
+            .await?;
+        Ok(())
+    }
+
+    async fn listen(&self, tx: mpsc::Sender<ChannelMessage>) -> Result<()> {
+        let mut offset: i64 = 0;
+        loop {
+            let resp = self
+                .client
+                .get(self.api_url("getUpdates"))
+                .query(&[("offset", offset.to_string()), ("timeout", "30".into())])
+                .send()
+                .await?
+                .json::<serde_json::Value>()
+                .await?;
+
+            if let Some(updates) = resp["result"].as_array() {
+                for update in updates {
+                    if let Some(msg) = update.get("message") {
+                        let sender = msg["from"]["username"]
+                            .as_str()
+                            .unwrap_or("unknown")
+                            .to_string();
+
+                        if !self.allowed_users.is_empty()
+                            && !self.allowed_users.contains(&sender)
+                        {
+                            continue;
+                        }
+
+                        let chat_id = msg["chat"]["id"].to_string();
+                        let channel_msg = ChannelMessage {
+                            id: msg["message_id"].to_string(),
+                            sender,
+                            reply_target: chat_id,
+                            content: msg["text"].as_str().unwrap_or("").to_string(),
+                            channel: "telegram".into(),
+                            timestamp: msg["date"].as_u64().unwrap_or(0),
+                            thread_ts: None,
+                        };
+
+                        if tx.send(channel_msg).await.is_err() {
+                            return Ok(());
+                        }
+                    }
+                    offset = update["update_id"].as_i64().unwrap_or(offset) + 1;
+                }
+            }
+        }
+    }
+
+    async fn health_check(&self) -> bool {
+        self.client
+            .get(self.api_url("getMe"))
+            .send()
+            .await
+            .map(|r| r.status().is_success())
+            .unwrap_or(false)
+    }
+}
+```
+
+**Checklist:**
+
+<Steps>
+  <Step title="Implement the Channel trait">
+    Create your file in `src/channels/`. Keep `send`, `listen`, `health_check`, and typing semantics consistent with other channels.
+  </Step>
+  <Step title="Register in the factory and config schema">
+    Add the channel to `src/channels/mod.rs`. Add config fields to `ChannelsConfig` in `src/config/schema.rs`.
+  </Step>
+  <Step title="Write tests">
+    Cover auth/allowlist enforcement and `health_check` with focused unit tests.
+  </Step>
+</Steps>
+
+---
+
+## Adding a Tool
+
+Tools are the agent's hands — they let it interact with the world.
+
+**Required methods:** `name()`, `description()`, `parameters_schema()`, `execute()`. The `spec()` method has a default implementation that composes the others.
+
+```rust
+// src/tools/traits.rs — required method signatures
+fn name(&self) -> &str;
+fn description(&self) -> &str;
+fn parameters_schema(&self) -> Value;        // JSON Schema object
+async fn execute(&self, args: Value) -> Result<ToolResult>;
+
+// Default implementation provided:
+// spec() — composes name, description, and parameters_schema into the
+//           function-call spec sent to the model
+```
+
+**Example — HTTP GET tool:**
+
+```rust
+use anyhow::Result;
+use async_trait::async_trait;
+use serde_json::{json, Value};
+
+pub struct HttpGetTool;
+
+#[async_trait]
+impl Tool for HttpGetTool {
+    fn name(&self) -> &str { "http_get" }
+
+    fn description(&self) -> &str {
+        "Fetch a URL and return the HTTP status code and content length"
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "url": { "type": "string", "description": "URL to fetch" }
+            },
+            "required": ["url"]
+        })
+    }
+
+    async fn execute(&self, args: Value) -> Result<ToolResult> {
+        let url = args["url"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing 'url' parameter"))?;
+
+        match reqwest::get(url).await {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                let len = resp.content_length().unwrap_or(0);
+                Ok(ToolResult {
+                    success: status < 400,
+                    output: format!("HTTP {status} — {len} bytes"),
+                    error: None,
+                })
+            }
+            Err(e) => Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some(format!("Request failed: {e}")),
+            }),
+        }
+    }
+}
+```
+
+**Checklist:**
+
+<Steps>
+  <Step title="Implement the Tool trait">
+    Create your file in `src/tools/`. Define a strict parameter schema with required fields and types.
+  </Step>
+  <Step title="Validate and sanitise all inputs">
+    Never trust `args` values. Validate types, ranges, and path safety before use. Return structured `ToolResult`; avoid panics in the runtime path.
+  </Step>
+  <Step title="Register in default_tools()">
+    Add your tool to the `default_tools()` function in `src/tools/mod.rs`.
+  </Step>
+  <Step title="Write tests">
+    Test factory wiring, input validation edge cases, and error return paths.
+  </Step>
+</Steps>
+
+---
+
+## Adding a Peripheral
+
+Peripherals expose hardware boards (STM32, Raspberry Pi GPIO) to the agent as tools.
+
+**Pattern:** Implement `Peripheral` in `src/peripherals/`. The peripheral exposes a `tools()` method that returns a list of `Tool` implementations; each tool delegates to the underlying hardware.
+
+```rust
+// src/peripherals/traits.rs — key method
+fn tools(&self) -> Vec<Box<dyn Tool>>;
+```
+
+**Checklist:**
+
+<Steps>
+  <Step title="Implement the Peripheral trait">
+    Create your file in `src/peripherals/`. Each hardware capability becomes a `Tool` returned from `tools()`.
+  </Step>
+  <Step title="Register board type in config schema">
+    Add config fields to the schema if needed. See `docs/hardware/hardware-peripherals-design.md` for protocol and firmware notes.
+  </Step>
+  <Step title="Write tests">
+    Mock the hardware interface for unit tests. Integration tests require physical hardware.
+  </Step>
+</Steps>
+
+---
+
+## Adding a Memory backend
+
+Memory backends provide pluggable persistence for the agent's knowledge.
+
+**Required methods:** `name()`, `store()`, `recall()`, `get()`, `list()`, `forget()`, `count()`, `health_check()`. Both `store()` and `recall()` accept an optional `session_id` for scoping.
+
+```rust
+// src/memory/traits.rs — required method signatures
+fn name(&self) -> &str;
+async fn store(&self, key: &str, content: &str, category: MemoryCategory, session_id: Option<&str>) -> Result<()>;
+async fn recall(&self, query: &str, limit: usize, session_id: Option<&str>) -> Result<Vec<MemoryEntry>>;
+async fn get(&self, key: &str) -> Result<Option<MemoryEntry>>;
+async fn list(&self, category: Option<&MemoryCategory>, session_id: Option<&str>) -> Result<Vec<MemoryEntry>>;
+async fn forget(&self, key: &str) -> Result<bool>;
+async fn count(&self) -> Result<usize>;
+async fn health_check(&self) -> bool;
+```
+
+Register your backend in `src/memory/mod.rs`.
+
+---
+
+## Registration pattern summary
+
+All extension traits follow the same four-step wiring pattern:
+
+1. Create your implementation file in the relevant `src/*/` directory.
+2. Register it in the module's factory function (`default_tools()`, provider match arm, etc.).
+3. Add any needed config keys to `src/config/schema.rs`.
+4. Write focused tests for factory wiring and error paths.

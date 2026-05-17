@@ -1,0 +1,100 @@
+---
+title: "Contributing to ZeroClaw"
+description: "ZeroClaw contributor guide: risk tiers, read-before-write workflow, pre-PR validation, and the extension points for providers, channels, tools, and peripherals."
+---
+
+ZeroClaw is a Rust-first autonomous agent runtime with a trait-driven, modular architecture. Contributions are welcome across docs, tests, bug fixes, and new extensions. This page covers the principles, workflow, validation gates, and extension surface you need to know before opening a PR.
+
+## Risk tiers
+
+Every change falls into one of three risk tiers. When in doubt, classify as higher risk.
+
+| Tier | Scope | Examples |
+|---|---|---|
+| **Low** | Docs, chores, tests only — no behaviour change | README edits, adding tests, fixing typos |
+| **Medium** | Most `src/**` behaviour changes without security or boundary impact | Adding a provider, adding a channel, refactoring a tool |
+| **High** | Security, runtime, gateway, tool surface, or CI workflow changes | `src/security/**`, `src/runtime/**`, `src/gateway/**`, `src/tools/**`, `.github/workflows/**` |
+
+High-risk PRs require threat and risk notes, a rollback strategy, and test or validation evidence for failure modes and boundaries.
+
+## Workflow
+
+<Steps>
+  <Step title="Read before write">
+    Inspect the existing module, factory wiring, and adjacent tests before making any changes. Understand what already exists; do not duplicate or contradict it.
+  </Step>
+  <Step title="One concern per PR">
+    Avoid mixed feature + refactor + infra patches in a single PR. Each PR should address one coherent concern.
+  </Step>
+  <Step title="Implement the minimal patch">
+    No speculative abstractions. No config keys without a concrete use case. No modifications to unrelated modules "while here".
+  </Step>
+  <Step title="Validate by risk tier">
+    Run the checks appropriate for your tier before pushing.
+  </Step>
+  <Step title="Document impact">
+    Update PR notes to describe behaviour changes, risk, side effects, and rollback path.
+  </Step>
+</Steps>
+
+## Pre-PR validation
+
+<Tabs>
+  <Tab title="All changes (recommended)">
+    ```bash
+    ./dev/ci.sh all
+    ```
+    Runs the full local CI suite: format check, lint, tests, and any additional validations.
+  </Tab>
+  <Tab title="Individual commands">
+    ```bash
+    cargo fmt --all -- --check     # format check
+    cargo clippy --all-targets -- -D warnings   # lint (warnings as errors)
+    cargo test                     # full test suite
+    ```
+  </Tab>
+  <Tab title="Docs-only changes">
+    Run the markdown lint and link-integrity checks. If you are touching bootstrap scripts:
+    ```bash
+    bash -n install.sh
+    ```
+  </Tab>
+</Tabs>
+
+## Extension points
+
+ZeroClaw's architecture exposes seven trait-based extension points. Each one follows the same wiring pattern: implement the trait, register in the factory module, add config keys if needed, write tests.
+
+| Extension point | Trait | Location | What it does |
+|---|---|---|---|
+| **Provider** | `Provider` | `src/providers/traits.rs` | LLM backend adapter |
+| **Channel** | `Channel` | `src/channels/traits.rs` | Messaging platform integration |
+| **Tool** | `Tool` | `src/tools/traits.rs` | Agent capability / action |
+| **Memory** | `Memory` | `src/memory/traits.rs` | Persistence backend |
+| **Observer** | `Observer` | `src/observability/traits.rs` | Telemetry and logging |
+| **RuntimeAdapter** | `RuntimeAdapter` | `src/runtime/traits.rs` | Execution environment (native, Docker) |
+| **Peripheral** | `Peripheral` | `src/peripherals/traits.rs` | Hardware boards (STM32, RPi GPIO) |
+
+## Architecture boundary rules
+
+- Extend by adding trait implementations and factory wiring first. Avoid cross-module rewrites for isolated features.
+- Keep dependency direction inward to contracts: concrete integrations depend on trait/config/util layers, not on other concrete integrations.
+- Avoid cross-subsystem coupling (for example, provider code importing channel internals).
+- Module responsibilities are single-purpose: orchestration in `agent/`, transport in `channels/`, model I/O in `providers/`, policy in `security/`, execution in `tools/`.
+- Introduce new shared abstractions only after repeated use (rule of three), with at least one real caller.
+- For config/schema changes, treat keys as a public contract: document defaults, compatibility impact, and migration/rollback path.
+
+## Anti-patterns
+
+- Do not add heavy dependencies for minor convenience.
+- Do not silently weaken security policy or access constraints.
+- Do not add speculative config or feature flags "just in case".
+- Do not mix large formatting-only changes with functional changes.
+- Do not bypass failing checks without an explicit explanation in the PR.
+- Do not hide behaviour-changing side effects in refactor commits.
+- Do not include personal identity or sensitive information in test data, examples, docs, or commits.
+
+## Further reading
+
+- [Adding providers, channels, tools, and peripherals](/contributing/adding-extensions) — trait signatures and complete worked examples
+- [Configuring custom AI provider endpoints](/contributing/custom-providers) — `custom:` and `anthropic-custom:` endpoint setup

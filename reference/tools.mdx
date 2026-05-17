@@ -1,0 +1,210 @@
+---
+title: "Built-in tools and the Tool trait"
+description: "ZeroClaw agent capabilities via the Tool trait. Covers built-in tools, autonomy levels, Composio opt-in, browser tool backends, and custom tool implementation."
+---
+
+Tools are the agent's hands — the mechanism through which it interacts with the outside world. Every built-in capability and every user-defined extension is a `Tool` implementation registered in the same factory. Autonomy levels control which tools the agent can invoke without human confirmation.
+
+## Tool trait
+
+The trait lives at `src/tools/traits.rs`. Four methods are required; `spec()` has a default implementation that composes the others.
+
+```rust
+// Required methods
+fn name(&self) -> &str;
+fn description(&self) -> &str;
+fn parameters_schema(&self) -> Value;   // JSON Schema object
+async fn execute(&self, args: Value) -> Result<ToolResult>;
+
+// Default implementation provided:
+// spec() — composes name, description, and parameters_schema
+//           into the function-call spec sent to the model
+```
+
+`ToolResult` carries three fields: `success: bool`, `output: String`, and `error: Option<String>`.
+
+## Built-in tools
+
+### Shell and file system
+
+| Tool | Source file | What it does |
+|---|---|---|
+| `shell` | `shell.rs` | Execute arbitrary shell commands |
+| `file_read` | `file_read.rs` | Read file contents |
+| `file_write` | `file_write.rs` | Write or overwrite a file |
+| `file_edit` | `file_edit.rs` | Apply targeted edits to a file |
+| `glob_search` | `glob_search.rs` | Find files by glob pattern |
+| `content_search` | `content_search.rs` | Search file contents with regex |
+| `pdf_read` | `pdf_read.rs` | Extract text from PDF files |
+
+### Memory
+
+| Tool | Source file | What it does |
+|---|---|---|
+| `memory_store` | `memory_store.rs` | Persist a memory entry |
+| `memory_recall` | `memory_recall.rs` | Query memories by semantic or keyword search |
+| `memory_forget` | `memory_forget.rs` | Delete a memory entry by key |
+
+### Scheduling
+
+| Tool | Source file | What it does |
+|---|---|---|
+| `schedule` | `schedule.rs` | Schedule a one-shot task |
+| `cron_add` | `cron_add.rs` | Add a recurring cron job |
+| `cron_list` | `cron_list.rs` | List active cron jobs |
+| `cron_update` | `cron_update.rs` | Modify an existing cron job |
+| `cron_remove` | `cron_remove.rs` | Remove a cron job |
+| `cron_run` | `cron_run.rs` | Trigger a cron job immediately |
+| `cron_runs` | `cron_runs.rs` | List recent cron run history |
+
+### Version control
+
+| Tool | Source file | What it does |
+|---|---|---|
+| `git_operations` | `git_operations.rs` | Git status, diff, commit, push, pull |
+
+### Network and web
+
+| Tool | Source file | What it does |
+|---|---|---|
+| `http_request` | `http_request.rs` | Make arbitrary HTTP requests |
+| `web_fetch` | `web_fetch.rs` | Fetch a URL and return content |
+| `web_search_tool` | `web_search_tool.rs` | Run a web search query |
+
+### Browser
+
+| Tool | Source file | What it does |
+|---|---|---|
+| `browser` | `browser.rs` | Full browser automation |
+| `browser_open` | `browser_open.rs` | Open a URL in the system browser |
+| `screenshot` | `screenshot.rs` | Capture a screenshot |
+| `image_info` | `image_info.rs` | Extract metadata from an image |
+
+### Notifications
+
+| Tool | Source file | What it does |
+|---|---|---|
+| `pushover` | `pushover.rs` | Send push notifications via Pushover |
+
+### Agent and SOP
+
+| Tool | Source file | What it does |
+|---|---|---|
+| `delegate` | `delegate.rs` | Delegate a subtask to another agent |
+| `sop_list` | `sop_list.rs` | List available SOPs |
+| `sop_execute` | `sop_execute.rs` | Begin executing an SOP |
+| `sop_advance` | `sop_advance.rs` | Advance to the next SOP step |
+| `sop_approve` | `sop_approve.rs` | Approve a pending SOP step |
+| `sop_status` | `sop_status.rs` | Check current SOP execution state |
+
+### Hardware
+
+| Tool | Source file | What it does |
+|---|---|---|
+| `hardware_board_info` | `hardware_board_info.rs` | Read peripheral board metadata |
+| `hardware_memory_map` | `hardware_memory_map.rs` | Inspect hardware memory layout |
+| `hardware_memory_read` | `hardware_memory_read.rs` | Read hardware memory regions |
+
+### Configuration and routing
+
+| Tool | Source file | What it does |
+|---|---|---|
+| `model_routing_config` | `model_routing_config.rs` | Inspect or adjust model routing rules |
+| `proxy_config` | `proxy_config.rs` | Read or update proxy configuration |
+| `cli_discovery` | `cli_discovery.rs` | Discover available CLI tools on the host |
+
+## Composio integration
+
+Composio provides opt-in access to 1000+ OAuth-connected applications through a single tool registration. It is disabled by default.
+
+```toml
+[tools]
+composio_enabled = true
+composio_api_key = "your-composio-key"
+```
+
+<Note>
+Composio requires an API key and network access to the Composio service. Do not enable it in air-gapped environments.
+</Note>
+
+When enabled, the `composio` tool (`composio.rs`) exposes the full Composio action catalogue to the agent. Each action appears as an individual callable operation; authentication for each connected app is handled by Composio's OAuth flow.
+
+## Browser tool backends
+
+The `browser` tool supports three execution backends, configured via `tools.browser_backend`:
+
+| Backend | Config value | Description |
+|---|---|---|
+| **Agent browser** | `agent_browser` | ZeroClaw's built-in Rust browser automation |
+| **Rust native** | `rust_native` | Headless Chrome/Firefox via native Rust bindings |
+| **Computer use** | `computer_use` | Anthropic Computer Use — screenshot + action loop |
+
+```toml
+[tools]
+browser_backend = "rust_native"   # agent_browser | rust_native | computer_use
+```
+
+<Warning>
+`computer_use` requires an Anthropic provider and consumes significantly more tokens per browser interaction due to repeated screenshot-action cycles.
+</Warning>
+
+## Autonomy levels
+
+Autonomy levels gate which tools the agent can invoke without pausing for human confirmation. Higher autonomy grants broader tool access.
+
+```toml
+[agent]
+autonomy_level = "high"   # low | medium | high
+```
+
+| Level | Tool access |
+|---|---|
+| `low` | Read-only and non-destructive tools only |
+| `medium` | Most tools; destructive operations require confirmation |
+| `high` | All registered tools without confirmation prompts |
+
+<Warning>
+`autonomy_level = "high"` combined with `shell` access grants the agent unrestricted command execution. Use only in trusted, sandboxed environments.
+</Warning>
+
+## Implementing a custom tool
+
+Register your tool in `src/tools/mod.rs` via `default_tools()`. See [Adding providers, channels, tools, and peripherals](/contributing/adding-extensions) for the complete trait signature and a full working example.
+
+```rust
+use anyhow::Result;
+use async_trait::async_trait;
+use serde_json::{json, Value};
+
+pub struct MyTool;
+
+#[async_trait]
+impl Tool for MyTool {
+    fn name(&self) -> &str { "my_tool" }
+
+    fn description(&self) -> &str {
+        "One-line description of what this tool does"
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "input": { "type": "string", "description": "The input value" }
+            },
+            "required": ["input"]
+        })
+    }
+
+    async fn execute(&self, args: Value) -> Result<ToolResult> {
+        let input = args["input"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing 'input' parameter"))?;
+        Ok(ToolResult {
+            success: true,
+            output: format!("Processed: {input}"),
+            error: None,
+        })
+    }
+}
+```

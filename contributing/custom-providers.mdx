@@ -1,0 +1,201 @@
+---
+title: "Configuring custom AI provider endpoints"
+description: "Point ZeroClaw at any OpenAI- or Anthropic-compatible endpoint using the custom: and anthropic-custom: prefixes. Covers config, env vars, and local servers."
+---
+
+ZeroClaw supports custom API endpoints for both OpenAI-compatible and Anthropic-compatible providers. This means you can connect to any self-hosted inference server, corporate LLM proxy, or third-party gateway without writing a custom provider implementation — just configure the endpoint URL with the appropriate prefix.
+
+## OpenAI-compatible endpoints (`custom:`)
+
+Prefix your endpoint URL with `custom:` to route calls through any service that implements the OpenAI chat completions API format:
+
+```toml
+default_provider = "custom:https://your-api.com"
+api_key          = "your-api-key"
+default_model    = "your-model-name"
+```
+
+<Note>
+The URL must include the scheme (`http://` or `https://`). ZeroClaw appends the completions path automatically.
+</Note>
+
+## Anthropic-compatible endpoints (`anthropic-custom:`)
+
+Prefix with `anthropic-custom:` for services that implement the Anthropic messages API format — corporate proxies and self-hosted gateways that mirror the Anthropic API:
+
+```toml
+default_provider = "anthropic-custom:https://your-api.com"
+api_key          = "your-api-key"
+default_model    = "your-model-name"
+```
+
+## Configuration methods
+
+<Tabs>
+  <Tab title="Config file">
+    Edit `~/.zeroclaw/config.toml`:
+
+    ```toml
+    api_key          = "your-api-key"
+    default_provider = "anthropic-custom:https://api.example.com"
+    default_model    = "claude-sonnet-4-6"
+    ```
+  </Tab>
+  <Tab title="Environment variables">
+    For both `custom:` and `anthropic-custom:` providers, supply the key via environment variable:
+
+    ```bash
+    export API_KEY="your-api-key"
+    # or:
+    export ZEROCLAW_API_KEY="your-api-key"
+    zeroclaw agent
+    ```
+  </Tab>
+</Tabs>
+
+## Local inference servers
+
+ZeroClaw ships first-class provider support for three local inference runtimes. These use dedicated provider IDs rather than the `custom:` prefix, and do not require an API key unless you configure the server to require one.
+
+<Tabs>
+  <Tab title="llama.cpp">
+    - **Provider ID:** `llamacpp` (alias: `llama.cpp`)
+    - **Default endpoint:** `http://localhost:8080/v1`
+
+    Start the server:
+
+    ```bash
+    llama-server -hf ggml-org/gpt-oss-20b-GGUF --jinja -c 133000 \
+      --host 127.0.0.1 --port 8033
+    ```
+
+    Configure ZeroClaw:
+
+    ```toml
+    default_provider    = "llamacpp"
+    api_url             = "http://127.0.0.1:8033/v1"
+    default_model       = "ggml-org/gpt-oss-20b-GGUF"
+    default_temperature = 0.7
+    ```
+
+    Validate:
+
+    ```bash
+    zeroclaw models refresh --provider llamacpp
+    zeroclaw agent -m "hello"
+    ```
+  </Tab>
+  <Tab title="SGLang">
+    - **Provider ID:** `sglang`
+    - **Default endpoint:** `http://localhost:30000/v1`
+
+    Start the server:
+
+    ```bash
+    python -m sglang.launch_server \
+      --model meta-llama/Llama-3.1-8B-Instruct --port 30000
+    ```
+
+    Configure ZeroClaw:
+
+    ```toml
+    default_provider    = "sglang"
+    default_model       = "meta-llama/Llama-3.1-8B-Instruct"
+    default_temperature = 0.7
+    ```
+
+    Validate:
+
+    ```bash
+    zeroclaw models refresh --provider sglang
+    zeroclaw agent -m "hello"
+    ```
+  </Tab>
+  <Tab title="vLLM">
+    - **Provider ID:** `vllm`
+    - **Default endpoint:** `http://localhost:8000/v1`
+
+    Start the server:
+
+    ```bash
+    vllm serve meta-llama/Llama-3.1-8B-Instruct
+    ```
+
+    Configure ZeroClaw:
+
+    ```toml
+    default_provider    = "vllm"
+    default_model       = "meta-llama/Llama-3.1-8B-Instruct"
+    default_temperature = 0.7
+    ```
+
+    Validate:
+
+    ```bash
+    zeroclaw models refresh --provider vllm
+    zeroclaw agent -m "hello"
+    ```
+  </Tab>
+</Tabs>
+
+## Examples
+
+<CodeGroup>
+```toml Local LLM server (generic custom endpoint)
+default_provider = "custom:http://localhost:8080/v1"
+api_key          = "your-api-key-if-required"
+default_model    = "local-model"
+```
+
+```toml Corporate proxy (Anthropic-compatible)
+default_provider = "anthropic-custom:https://llm-proxy.corp.example.com"
+api_key          = "internal-token"
+```
+
+```toml Cloud provider gateway (OpenAI-compatible)
+default_provider = "custom:https://gateway.cloud-provider.com/v1"
+api_key          = "gateway-api-key"
+default_model    = "gpt-4"
+```
+</CodeGroup>
+
+## Testing your configuration
+
+```bash
+# Interactive session
+zeroclaw agent
+
+# Single message test
+zeroclaw agent -m "test message"
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Authentication errors">
+    - Verify the API key is correct and has not expired.
+    - Confirm the endpoint URL includes the scheme (`http://` or `https://`).
+    - Ensure the endpoint is reachable from your network: `curl -I https://your-api.com`
+  </Accordion>
+  <Accordion title="Model not found">
+    - Confirm the model name matches the provider's available models exactly.
+    - Check that the endpoint and model family match — some gateways only expose a subset of models.
+    - List available models from the configured endpoint and key:
+
+    ```bash
+    curl -sS https://your-api.com/models \
+      -H "Authorization: Bearer $API_KEY"
+    ```
+
+    - If the gateway does not implement `/models`, send a minimal chat request and inspect the error text returned by the provider.
+  </Accordion>
+  <Accordion title="Connection issues">
+    - Test endpoint accessibility: `curl -I https://your-api.com`
+    - Check firewall and proxy settings.
+    - Confirm the provider service is operational.
+  </Accordion>
+</AccordionGroup>
+
+## Implementing a fully custom provider
+
+If you need behaviour that a URL prefix cannot provide — custom auth headers, a non-standard API shape, streaming quirks — implement the `Provider` trait directly. See [Adding providers, channels, tools, and peripherals](/contributing/adding-extensions) for the trait signature and a complete worked example.

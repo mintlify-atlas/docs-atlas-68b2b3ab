@@ -1,0 +1,106 @@
+---
+title: "Monitoring ZeroClaw with metrics and observability"
+description: "Use built-in CLI commands, Prometheus metrics, OpenTelemetry export, and the Observer trait to monitor ZeroClaw agent runtime health and uptime."
+---
+
+ZeroClaw ships several layers of observability: quick-check CLI commands for daily operations, structured metrics for dashboards, OpenTelemetry export for distributed tracing pipelines, and a composable `Observer` trait for custom instrumentation. Use whichever combination matches your environment.
+
+## CLI health commands
+
+The fastest way to inspect runtime state is through the two built-in diagnostic commands.
+
+<Steps>
+  <Step title="Check runtime summary">
+    `zeroclaw status` prints a summary of the active provider, model, and configured channels.
+
+    ```bash
+    zeroclaw status
+    ```
+
+    Expected output includes provider name, model identifier, and the list of enabled channels.
+  </Step>
+  <Step title="Run full diagnostics">
+    `zeroclaw doctor` performs a deeper configuration and connectivity check, reporting any critical errors.
+
+    ```bash
+    zeroclaw doctor
+    ```
+
+    Run this command first whenever you suspect a configuration problem. No critical errors means the runtime is healthy.
+  </Step>
+</Steps>
+
+## Channel health
+
+Channels have their own dedicated health check separate from the main `doctor` command.
+
+```bash
+zeroclaw channel doctor
+```
+
+This verifies credentials, allowlist fields, and connectivity for every configured channel. Review any reported failures against the channel-specific credentials in `~/.zeroclaw/config.toml`.
+
+## Prometheus metrics
+
+Enabling the `observability` feature at build time exposes a Prometheus-compatible metrics endpoint.
+
+```bash
+cargo build --release --features observability
+```
+
+Once running, ZeroClaw exports counters and gauges that can be scraped by a Prometheus server. Point your `prometheus.yml` scrape config at the gateway's metrics path to collect them.
+
+<Note>
+  The `observability` feature is separate from the default feature set. Rebuild with this flag if you need Prometheus scraping.
+</Note>
+
+## OpenTelemetry OTLP export
+
+For distributed tracing and structured telemetry pipelines, enable the `observability-otel` feature.
+
+```bash
+cargo build --release --features observability-otel
+```
+
+ZeroClaw will export spans and metrics to any OTLP-compatible collector (Jaeger, Grafana Tempo, Honeycomb, etc.). Configure the collector endpoint via the standard `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable before starting the runtime.
+
+<Tip>
+  Combine `observability` and `observability-otel` in the same build to emit both Prometheus metrics and OTLP traces simultaneously.
+</Tip>
+
+## Observer trait
+
+The `Observer` trait in `src/observability/traits.rs` is the internal hook point for all runtime events. ZeroClaw provides three built-in implementations.
+
+<AccordionGroup>
+  <Accordion title="Noop observer">
+    The default implementation. Discards all events with zero overhead. Used when no observability features are enabled.
+  </Accordion>
+  <Accordion title="Log observer">
+    Writes structured log lines for every runtime event using the standard Rust `log` facade. Useful for development and low-volume deployments where a full metrics pipeline is unnecessary.
+  </Accordion>
+  <Accordion title="Multi observer">
+    Fan-out implementation that forwards events to an ordered list of child observers. Use this to combine Log + Prometheus or Log + OTLP in a single runtime without writing custom glue code.
+  </Accordion>
+</AccordionGroup>
+
+Custom observers can be registered in the observability factory module by implementing the `Observer` trait and wiring the new type into the factory.
+
+## Heartbeat monitoring
+
+ZeroClaw writes periodic state updates to `~/.zeroclaw/daemon_state.json` while the daemon is running. External uptime monitors can watch this file for freshness as a lightweight heartbeat signal.
+
+For hosts that use the `HEARTBEAT.md` periodic task convention, schedule a task that reads `daemon_state.json` modification time and alerts if it exceeds your expected heartbeat interval.
+
+<Warning>
+  A stale `daemon_state.json` indicates the daemon stopped updating its state. Investigate with `zeroclaw service status` and review logs before assuming the process is healthy.
+</Warning>
+
+### Log locations
+
+| Platform | Log path |
+|---|---|
+| macOS / Windows | `~/.zeroclaw/logs/daemon.stdout.log`, `~/.zeroclaw/logs/daemon.stderr.log` |
+| Linux (systemd) | `journalctl --user -u zeroclaw.service -f` |
+
+Use these logs alongside the metrics pipeline to correlate runtime events with resource or connectivity anomalies.

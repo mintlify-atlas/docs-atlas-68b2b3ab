@@ -1,0 +1,214 @@
+---
+title: "Running ZeroClaw: agent, gateway, and daemon modes"
+description: "Start ZeroClaw as an interactive agent, a webhook gateway, or a full autonomous daemon. Covers heartbeat tasks, cron scheduling, and emergency stop."
+---
+
+ZeroClaw exposes three distinct runtime modes depending on how much autonomy you need: `agent` for interactive or single-shot tasks, `gateway` for webhook serving, and `daemon` for the full autonomous long-running runtime. Each mode can be used independently or composed as part of a larger deployment.
+
+<Tabs>
+  <Tab title="agent">
+    The `agent` command runs a single conversation turn or drops into an interactive REPL. It is the fastest way to send a prompt or iterate on a task without starting a persistent server.
+
+    ```bash
+    # Single-shot message
+    zeroclaw agent -m "Hello, ZeroClaw!"
+
+    # Interactive session
+    zeroclaw agent
+
+    # Use a specific provider for this session
+    zeroclaw agent --provider openai-codex -m "hello"
+
+    # Use a named auth profile
+    zeroclaw agent --provider openai-codex --auth-profile openai-codex:work -m "hello"
+    ```
+
+    Agent mode exits after each task completes. Use it for scripting, one-off queries, and testing your provider configuration. For continuous operation, use `daemon` instead.
+
+    <Note>
+      Channels (Telegram, Discord, Slack, and others) require `zeroclaw daemon` to be running. `agent` alone does not start channel listeners.
+    </Note>
+  </Tab>
+
+  <Tab title="gateway">
+    The `gateway` command starts the webhook server without the full autonomous runtime. Use it when you want to accept inbound HTTP requests and forward them to the agent loop while managing other components separately.
+
+    ```bash
+    # Default: bind to 127.0.0.1:42617
+    zeroclaw gateway
+
+    # Bind to a specific port
+    zeroclaw gateway --port 42617
+
+    # Random port (useful for security-hardened or parallel setups)
+    zeroclaw gateway --port 0
+    ```
+
+    On first start, a 6-digit pairing code is printed to the terminal. Exchange it for a bearer token via `POST /pair` with the `X-Pairing-Code` header. All subsequent `/webhook` requests require `Authorization: Bearer <token>`.
+
+    Configure the gateway in `~/.zeroclaw/config.toml`:
+
+    ```toml
+    [gateway]
+    port = 42617
+    host = "127.0.0.1"
+    require_pairing = true
+    allow_public_bind = false
+    ```
+
+    <Warning>
+      The gateway refuses to bind to `0.0.0.0` unless `allow_public_bind = true` is explicitly set in config or a tunnel is active. Do not set `allow_public_bind = true` on untrusted networks.
+    </Warning>
+  </Tab>
+
+  <Tab title="daemon">
+    The `daemon` command starts the full autonomous runtime: gateway, channel listeners, cron scheduler, heartbeat engine, and the agent loop — all in a single foreground process.
+
+    ```bash
+    # Start with config defaults
+    zeroclaw daemon
+
+    # Override bind address and port at runtime
+    zeroclaw daemon --host 127.0.0.1 --port 42617
+
+    # Public LAN bind (trusted networks only)
+    zeroclaw daemon --host 0.0.0.0 --port 42617
+    ```
+
+    Use `daemon` in production, on always-on hosts, and whenever you need the agent to respond to channel messages, run scheduled tasks, or execute periodic heartbeat workflows.
+
+    After starting the daemon, verify all systems are healthy:
+
+    ```bash
+    zeroclaw status
+    zeroclaw doctor
+    zeroclaw channel doctor
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Heartbeat
+
+When `daemon` is running, ZeroClaw reads periodic tasks from a `HEARTBEAT.md` file in your workspace. Each line starting with `- ` in that file is treated as a task to execute at the configured interval. When no `- ` entries exist in `HEARTBEAT.md`, the engine falls back to the `message` field in the `[heartbeat]` config block.
+
+```toml
+[heartbeat]
+enabled = false
+interval_minutes = 30
+message = "Check London time"     # fallback task when HEARTBEAT.md has no `- ` entries
+target = "telegram"               # announce channel: telegram, discord, slack, mattermost
+to = "123456789"                  # target recipient, chat, or channel ID
+```
+
+When `target` and `to` are set, the daemon posts heartbeat results to that channel and recipient automatically. Set `enabled = false` to turn off heartbeat entirely.
+
+<Note>
+  Heartbeat requires `zeroclaw daemon` (or the background service) to be running. It does not fire when only `zeroclaw agent` or `zeroclaw gateway` is active.
+</Note>
+
+---
+
+## Cron scheduling
+
+ZeroClaw includes a built-in task scheduler managed with the `cron` subcommand. The daemon must be running for tasks to fire.
+
+```bash
+# List all scheduled tasks
+zeroclaw cron list
+
+# Add a task that repeats at a fixed interval
+zeroclaw cron add-every 30m "Check inbox"
+
+# Schedule a task at a specific time
+zeroclaw cron add-at "2026-06-01T09:00:00" "Send reminder"
+
+# Run once at the next opportunity
+zeroclaw cron once "2026-06-01T09:00:00" "Deploy release"
+
+# Remove a scheduled task by ID
+zeroclaw cron remove <task-id>
+
+# Update an existing task
+zeroclaw cron update <task-id> "Updated task text"
+
+# Pause and resume without removing
+zeroclaw cron pause <task-id>
+zeroclaw cron resume <task-id>
+```
+
+Tasks that fire while the daemon is stopped are not backfilled.
+
+---
+
+## Emergency stop
+
+`zeroclaw estop` lets you halt all autonomous task execution immediately without restarting the process, and resume it when safe. Use it during incidents or before applying a config change.
+
+```bash
+zeroclaw estop
+```
+
+<Warning>
+  Emergency stop suspends autonomous execution including cron tasks and heartbeat. Channel listeners remain active so you can communicate with a halted agent and issue a resume command.
+</Warning>
+
+---
+
+## Setup flow
+
+<Steps>
+  <Step title="Run onboarding">
+    Configure your API key, provider, and workspace in one step:
+
+    ```bash
+    zeroclaw onboard --api-key sk-... --provider openrouter
+    ```
+  </Step>
+
+  <Step title="Verify configuration">
+    Check that auth and system dependencies are healthy:
+
+    ```bash
+    zeroclaw auth status
+    zeroclaw doctor
+    ```
+  </Step>
+
+  <Step title="Start the daemon">
+    Launch the full runtime with gateway, channels, and scheduler:
+
+    ```bash
+    zeroclaw daemon
+    ```
+  </Step>
+
+  <Step title="Confirm channels are live">
+    ```bash
+    zeroclaw channel doctor
+    zeroclaw status
+    ```
+  </Step>
+
+  <Step title="(Optional) Enable heartbeat">
+    Set `enabled = true` in the `[heartbeat]` block of `~/.zeroclaw/config.toml`, set `interval_minutes`, and create `HEARTBEAT.md` in your workspace with task lines starting with `- `.
+  </Step>
+</Steps>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Service management" icon="server" href="/deployment/service-management">
+    Run ZeroClaw as a systemd or OpenRC background service
+  </Card>
+  <Card title="Network configuration" icon="network-wired" href="/deployment/network">
+    Tunnel providers, gateway bind options, and reverse proxy setup
+  </Card>
+  <Card title="Docker" icon="docker" href="/deployment/docker">
+    Container-based deployment and sandboxed shell execution
+  </Card>
+  <Card title="CLI reference" icon="terminal" href="/reference/commands">
+    Every command and flag, with examples
+  </Card>
+</CardGroup>

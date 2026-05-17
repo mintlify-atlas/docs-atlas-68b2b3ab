@@ -1,0 +1,200 @@
+---
+title: "Running ZeroClaw in Docker"
+description: "Deploy ZeroClaw via the GHCR image or a local build. Configure sandboxed tool execution with the Docker runtime adapter and use Podman if preferred."
+---
+
+ZeroClaw supports Docker in two distinct ways: you can run ZeroClaw itself inside a Docker container, and you can configure ZeroClaw to execute each shell tool call inside a fresh Docker container for sandboxing. The two are independent and can be combined or used separately.
+
+## Running ZeroClaw in Docker
+
+The official image is published to the GitHub Container Registry. The default entrypoint runs `zeroclaw gateway`, exposing the webhook server on port `42617`.
+
+### Quick start with Docker Compose
+
+The fastest way to bring up ZeroClaw in Docker is with the provided Compose file:
+
+```bash
+# Clone the repository
+git clone https://github.com/zeroclaw-labs/zeroclaw.git
+cd zeroclaw
+
+# Set your API key and start
+API_KEY=sk-... docker compose up -d
+```
+
+The gateway is then accessible at `http://localhost:42617`.
+
+The full `docker-compose.yml`:
+
+```yaml
+services:
+  zeroclaw:
+    image: ghcr.io/zeroclaw-labs/zeroclaw:latest
+    container_name: zeroclaw
+    restart: unless-stopped
+    environment:
+      - API_KEY=${API_KEY:-}
+      - PROVIDER=${PROVIDER:-openrouter}
+      - ZEROCLAW_ALLOW_PUBLIC_BIND=true
+      - ZEROCLAW_GATEWAY_PORT=${ZEROCLAW_GATEWAY_PORT:-42617}
+    volumes:
+      - zeroclaw-data:/zeroclaw-data
+    ports:
+      - "${HOST_PORT:-42617}:${ZEROCLAW_GATEWAY_PORT:-42617}"
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "zeroclaw", "status"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  zeroclaw-data:
+```
+
+<Note>
+  `ZEROCLAW_ALLOW_PUBLIC_BIND=true` is required for container networking. Inside Docker, ZeroClaw must bind to `[::]` so the published port mapping works. This does not expose the gateway to the public internet — Docker handles the host-side binding.
+</Note>
+
+### Bootstrap with the install script
+
+The `install.sh` script includes a `--docker` flag that builds the image and configures ZeroClaw to use it:
+
+```bash
+./install.sh --docker
+```
+
+To skip the local image build and use an existing tag or pull a fallback:
+
+```bash
+./install.sh --docker --skip-build
+```
+
+### Using Podman instead of Docker
+
+Set `ZEROCLAW_CONTAINER_CLI` to use Podman as the container runtime:
+
+```bash
+ZEROCLAW_CONTAINER_CLI=podman ./install.sh --docker
+```
+
+This environment variable is respected at both install time and runtime.
+
+### Building the image locally
+
+To build from source instead of pulling the prebuilt image, replace the `image:` line in your Compose file:
+
+```yaml
+services:
+  zeroclaw:
+    build: .   # uses the local Dockerfile
+```
+
+Or build directly with Docker:
+
+```bash
+docker build --target release -t zeroclaw:local .
+```
+
+The `Dockerfile` uses a multi-stage build. Stage one compiles the release binary with `rust:1.93-slim`. The production stage produces a minimal `distroless/cc-debian13:nonroot` image — no shell, no package manager, no extra attack surface. A `dev` stage is also available using `debian:trixie-slim` with `curl` included for easier debugging, defaulting to Ollama with `llama3.2`:
+
+```bash
+docker build --target dev -t zeroclaw:dev .
+```
+
+---
+
+## Docker runtime adapter (sandboxed tool execution)
+
+Separately from running ZeroClaw itself in Docker, you can configure ZeroClaw to execute each shell tool call inside a fresh container. This is the Docker runtime adapter, controlled by `runtime.kind = "docker"`.
+
+```toml
+[runtime]
+kind = "docker"
+
+[runtime.docker]
+image = "alpine:3.20"             # container image for shell execution
+network = "none"                  # docker network mode ("none", "bridge", etc.)
+memory_limit_mb = 512             # optional memory limit in MB
+cpu_limit = 1.0                   # optional CPU limit (fractional cores)
+read_only_rootfs = true           # mount root filesystem as read-only
+mount_workspace = true            # mount workspace into /workspace
+allowed_workspace_roots = []      # optional allowlist for workspace mount validation
+```
+
+With this configuration, every shell command the agent runs is executed in a new, isolated container based on `alpine:3.20`. The container is discarded after the command completes.
+
+### Configuration options
+
+| Key | Type | Description |
+|---|---|---|
+| `image` | string | Container image for shell execution |
+| `network` | string | Docker network mode. Use `"none"` to block network access from tool calls |
+| `memory_limit_mb` | integer | Memory limit in MB. Omit to use the Docker default |
+| `cpu_limit` | float | CPU limit as fractional cores (e.g. `1.0` = one core) |
+| `read_only_rootfs` | bool | Mount the container root filesystem as read-only |
+| `mount_workspace` | bool | Mount the workspace directory into `/workspace` inside the container |
+| `allowed_workspace_roots` | array | Optional allowlist of directories that may be mounted |
+
+### Docker runtime vs native runtime
+
+<Tabs>
+  <Tab title="Docker runtime">
+    Use `runtime.kind = "docker"` when:
+
+    - You want strong process isolation for every shell tool call
+    - You are running untrusted or user-supplied prompts
+    - You need a reproducible, locked-down execution environment
+    - You want to prevent tool calls from accessing the host filesystem (`read_only_rootfs = true`, `network = "none"`)
+  </Tab>
+  <Tab title="Native runtime">
+    Use `runtime.kind = "native"` (the default) when:
+
+    - You are running on constrained hardware where Docker is unavailable or too heavy
+    - Your workspace tooling requires direct host filesystem access
+    - You trust the prompts and tasks the agent will execute
+    - You want the lowest possible overhead for tool calls
+  </Tab>
+</Tabs>
+
+<Warning>
+  WASM and edge runtimes are planned but not yet implemented. If you configure an unsupported `runtime.kind`, ZeroClaw exits immediately with a clear error message rather than silently falling back to native.
+</Warning>
+
+---
+
+## Environment variables
+
+| Variable | Description |
+|---|---|
+| `API_KEY` | LLM provider API key (also accepted as `ZEROCLAW_API_KEY`) |
+| `PROVIDER` | Provider ID (e.g. `openrouter`, `openai`, `anthropic`, `ollama`) |
+| `ZEROCLAW_GATEWAY_PORT` | Gateway port inside the container (default: `42617`) |
+| `ZEROCLAW_ALLOW_PUBLIC_BIND` | Set to `true` to allow `0.0.0.0` binding inside Docker |
+| `ZEROCLAW_CONTAINER_CLI` | Container CLI binary (default: `docker`; set to `podman` for Podman) |
+| `HOST_PORT` | Host-side port mapping for Compose (default: `42617`) |
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Running the daemon" icon="play" href="/deployment/running-daemon">
+    Foreground daemon, gateway, agent modes, and cron scheduling
+  </Card>
+  <Card title="Network configuration" icon="network-wired" href="/deployment/network">
+    Tunnel providers, reverse proxy, and public bind options
+  </Card>
+  <Card title="Service management" icon="server" href="/deployment/service-management">
+    systemd and OpenRC background service setup
+  </Card>
+  <Card title="Security overview" icon="shield" href="/security/overview">
+    Sandbox, allowlists, gateway pairing, and filesystem scoping
+  </Card>
+</CardGroup>

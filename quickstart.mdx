@@ -1,81 +1,124 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
-icon: 'rocket'
+title: "Quickstart: run your first ZeroClaw agent"
+description: "Install ZeroClaw, configure your AI provider with the onboard command, send a test message, and start the autonomous daemon in under five minutes."
 ---
 
-## Get started in three steps
+This guide takes you from a fresh machine to a working ZeroClaw agent in the shortest possible path. You will install the binary, run onboarding to create your config file, send a test message, and optionally start the long-running daemon.
 
-Get your documentation site running locally and make your first customization.
+<Steps>
+  <Step title="Install ZeroClaw">
+    The fastest install method depends on your platform. Pick the one that fits.
 
-### Step 1: Set up your local environment
+    **Homebrew (macOS or Linuxbrew):**
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    ```bash
+    brew install zeroclaw
+    ```
 
-### Step 2: Deploy your changes
+    **One-line installer (Linux/macOS):**
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw/master/install.sh | bash
+    ```
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+    The script builds ZeroClaw from source using your existing Rust toolchain. On low-RAM or low-disk machines, add `--prefer-prebuilt` to download a pre-built binary instead:
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw/master/install.sh | bash -s -- --prefer-prebuilt
+    ```
 
-### Step 3: Go live
+    After installation, verify the binary is on your `PATH`:
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    ```bash
+    zeroclaw --version
+    ```
+  </Step>
+
+  <Step title="Run onboarding">
+    Onboarding creates `~/.zeroclaw/config.toml` with your API key, provider, and sensible defaults for memory, security, and autonomy.
+
+    ```bash
+    zeroclaw onboard --api-key sk-... --provider openrouter
+    ```
+
+    Replace `sk-...` with your API key. The `--provider` flag accepts any provider ID — run `zeroclaw providers` to see the full list. You can also specify a model explicitly:
+
+    ```bash
+    zeroclaw onboard --api-key sk-... --provider openrouter --model "openrouter/auto"
+    ```
+
+    If you prefer to walk through each option manually, use the interactive wizard:
+
+    ```bash
+    zeroclaw onboard --interactive
+    ```
+
+    <Tip>
+      Run `zeroclaw doctor` after onboarding to verify that your configuration is valid and all required dependencies are reachable.
+    </Tip>
+  </Step>
+
+  <Step title="Send your first message">
+    With onboarding complete, send a single-shot message to confirm the agent is working:
+
+    ```bash
+    zeroclaw agent -m "Hello, ZeroClaw!"
+    ```
+
+    The agent will call your configured provider, apply memory and tool routing, and print the response inline. To enter a persistent interactive session instead:
+
+    ```bash
+    zeroclaw agent
+    ```
+
+    Type your messages at the prompt and press Enter. Use `Ctrl+C` or `exit` to quit.
+  </Step>
+
+  <Step title="Start the autonomous daemon">
+    The daemon keeps ZeroClaw running continuously so it can process scheduled tasks, respond to channel messages (Telegram, Discord, Slack, etc.), and execute heartbeat workflows.
+
+    ```bash
+    zeroclaw daemon
+    ```
+
+    Check that the daemon and all configured channels are healthy:
+
+    ```bash
+    zeroclaw status
+    zeroclaw doctor
+    ```
+
+    To run ZeroClaw as a persistent background service managed by systemd (Linux) or OpenRC (Alpine), see [service management](/deployment/service-management).
+  </Step>
+</Steps>
+
+## Verify your setup
+
+Use `zeroclaw doctor` to run a full diagnostic that checks daemon freshness, scheduler health, and channel connectivity:
+
+```bash
+zeroclaw doctor
+```
+
+Use `zeroclaw status` for a quick snapshot of the current system state:
+
+```bash
+zeroclaw status
+```
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Installation options" icon="download" href="/installation">
+    Pre-built binaries, build from source, shell completions, and prerequisites
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration/overview">
+    Set providers, channels, memory backends, and autonomy levels
+  </Card>
+  <Card title="Channels" icon="comments" href="/configuration/channels">
+    Connect Telegram, Discord, Slack, WhatsApp, and more
+  </Card>
+  <Card title="CLI reference" icon="terminal" href="/reference/commands">
+    Every command and flag, with examples
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

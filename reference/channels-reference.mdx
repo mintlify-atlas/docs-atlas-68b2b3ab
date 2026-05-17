@@ -1,0 +1,171 @@
+---
+title: "Channel trait and messaging integrations"
+description: "The ZeroClaw Channel trait normalises every messaging platform. Covers built-in channels, polling vs webhook delivery, allowlists, and adding custom channels."
+---
+
+Every inbound and outbound message in ZeroClaw flows through the `Channel` trait. The trait normalises platform differences — polling vs. webhooks, threading models, typing indicators, reactions — so the agent orchestration layer never needs to know which platform it is talking on.
+
+## Channel trait
+
+The trait lives at `src/channels/traits.rs`. Three methods are required; the rest have default no-op implementations you can override.
+
+```rust
+// Required methods
+fn name(&self) -> &str;
+async fn send(&self, message: &SendMessage) -> Result<()>;
+async fn listen(&self, tx: mpsc::Sender<ChannelMessage>) -> Result<()>;
+
+// Default implementations provided (override as needed):
+// health_check()     — returns true by default
+// start_typing()     — no-op
+// stop_typing()      — no-op
+// send_draft()       — no-op
+// update_draft()     — no-op
+// finalize_draft()   — no-op
+// cancel_draft()     — no-op
+// add_reaction()     — no-op
+// remove_reaction()  — no-op
+```
+
+`ChannelMessage` carries a normalised message with fields `id`, `sender`, `reply_target`, `content`, `channel`, `timestamp`, and an optional `thread_ts` for platforms that support threading.
+
+## Built-in channels
+
+<CardGroup cols={2}>
+  <Card title="CLI" icon="terminal">
+    Interactive terminal session. Polling (stdin read loop).
+  </Card>
+  <Card title="Telegram" icon="paper-plane">
+    Telegram Bot API. Polling via `getUpdates` with long-poll timeout.
+  </Card>
+  <Card title="Discord" icon="discord">
+    Discord Bot. Polling via gateway websocket.
+  </Card>
+  <Card title="Slack" icon="slack">
+    Slack Bot. Webhook or Socket Mode.
+  </Card>
+  <Card title="Mattermost" icon="message-square">
+    Mattermost Bot. Webhook delivery.
+  </Card>
+  <Card title="iMessage" icon="message-circle">
+    iMessage via BlueBubbles or similar bridge. Polling.
+  </Card>
+  <Card title="Matrix" icon="grid">
+    Matrix protocol. Polling via sync API.
+  </Card>
+  <Card title="Signal" icon="shield">
+    Signal Messenger via signal-cli bridge. Polling.
+  </Card>
+  <Card title="WhatsApp" icon="message-square">
+    WhatsApp via WA Web bridge. Polling.
+  </Card>
+  <Card title="Linq" icon="link">
+    Linq messaging. Polling.
+  </Card>
+  <Card title="Email" icon="mail">
+    IMAP/SMTP email channel. Polling.
+  </Card>
+  <Card title="IRC" icon="hash">
+    IRC client. Polling via TCP connection.
+  </Card>
+  <Card title="Lark" icon="feather">
+    Lark / Feishu. Webhook delivery.
+  </Card>
+  <Card title="DingTalk" icon="bell">
+    DingTalk. Webhook delivery.
+  </Card>
+  <Card title="QQ" icon="message-circle">
+    Tencent QQ. Polling.
+  </Card>
+  <Card title="Nostr" icon="zap">
+    Nostr decentralised protocol. Relay polling.
+  </Card>
+  <Card title="Webhook" icon="webhook">
+    Generic inbound webhook endpoint. Push delivery via ZeroClaw gateway.
+  </Card>
+  <Card title="MQTT" icon="radio">
+    MQTT broker subscription. Polling via broker keep-alive.
+  </Card>
+  <Card title="Nextcloud Talk" icon="cloud">
+    Nextcloud Talk. Polling.
+  </Card>
+  <Card title="WATI" icon="message-square">
+    WATI WhatsApp Business API. Webhook delivery.
+  </Card>
+  <Card title="ClawdTalk" icon="cpu">
+    ZeroClaw-native inter-agent channel.
+  </Card>
+</CardGroup>
+
+## Delivery modes
+
+| Mode | How it works | Examples |
+|---|---|---|
+| **Polling** | ZeroClaw calls the platform API on a timer or long-poll loop | Telegram, Discord, Matrix, Signal, QQ, IRC, Email |
+| **Webhook / Push** | Platform pushes events to ZeroClaw's gateway server | Slack Socket Mode, Lark, DingTalk, WATI, generic Webhook |
+
+For webhook channels, the gateway server (`src/gateway/`) must be reachable from the platform. Use a tunnel (`cloudflare`, `tailscale`, `ngrok`, or `custom`) to expose a local instance.
+
+## Channel allowlist
+
+Each channel supports an `allowed_users` list that gates which senders the agent will process. Messages from users not on the list are silently dropped in the `listen` loop before they reach the orchestration layer.
+
+```toml
+[channels.telegram]
+bot_token     = "..."
+allowed_users = ["alice", "bob"]   # Telegram usernames; empty = allow all
+```
+
+<Warning>
+An empty `allowed_users` list means **all senders are accepted**. Always set explicit allowlists on internet-facing channels in production deployments.
+</Warning>
+
+## CLI commands
+
+```bash
+zeroclaw channel list           # list configured channels and their status
+zeroclaw channel start          # start listening on all enabled channels
+zeroclaw channel doctor         # run health_check() on each channel and report results
+```
+
+## Registering a new channel
+
+<Steps>
+  <Step title="Implement the Channel trait">
+    Create your implementation file in `src/channels/`. Implement the three required methods: `name()`, `send()`, and `listen()`.
+
+    ```rust
+    use anyhow::Result;
+    use async_trait::async_trait;
+    use tokio::sync::mpsc;
+
+    pub struct MyChannel { /* your fields */ }
+
+    #[async_trait]
+    impl Channel for MyChannel {
+        fn name(&self) -> &str { "my-channel" }
+
+        async fn send(&self, message: &SendMessage) -> Result<()> {
+            // deliver message.content to message.recipient
+            Ok(())
+        }
+
+        async fn listen(&self, tx: mpsc::Sender<ChannelMessage>) -> Result<()> {
+            // poll or subscribe; send ChannelMessage values to tx
+            Ok(())
+        }
+    }
+    ```
+  </Step>
+  <Step title="Register in the channel factory">
+    Add your channel to `src/channels/mod.rs` so it can be instantiated from config.
+  </Step>
+  <Step title="Add config keys">
+    Add any required configuration fields to `ChannelsConfig` in `src/config/schema.rs`.
+  </Step>
+  <Step title="Write tests">
+    Cover auth/allowlist enforcement and `health_check` with focused unit tests.
+  </Step>
+</Steps>
+
+See [Adding providers, channels, tools, and peripherals](/contributing/adding-extensions) for the complete Channel trait signature and a full working example.

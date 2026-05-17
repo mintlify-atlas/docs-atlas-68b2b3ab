@@ -1,0 +1,129 @@
+---
+title: "Running ZeroClaw on Android with Termux"
+description: "Install ZeroClaw on Android using Termux or ADB, choose the right architecture binary, and understand Android-specific runtime limitations."
+---
+
+ZeroClaw provides prebuilt binaries for Android devices targeting both modern 64-bit phones and older 32-bit hardware. The recommended path is Termux, which gives you a full Linux-like environment without requiring root.
+
+## Supported architectures
+
+| Target | Android version | Devices |
+|---|---|---|
+| `aarch64-linux-android` | Android 5.0+ (API 21+) | Modern 64-bit phones |
+| `armv7-linux-androideabi` | Android 4.1+ (API 16+) | Older 32-bit phones (Galaxy S3, etc.) |
+
+## Installation via Termux
+
+<Steps>
+  <Step title="Install Termux">
+    Download Termux from [F-Droid](https://f-droid.org/packages/com.termux/) or from the GitHub releases page.
+
+    <Warning>
+      The Play Store version of Termux is outdated and unsupported. Use F-Droid or the GitHub release.
+    </Warning>
+  </Step>
+
+  <Step title="Check your device architecture">
+    Open Termux and run:
+
+    ```bash
+    uname -m
+    ```
+
+    - `aarch64` — 64-bit device, use the `aarch64-linux-android` binary
+    - `armv7l` or `armv8l` — 32-bit device, use the `armv7-linux-androideabi` binary
+  </Step>
+
+  <Step title="Download the ZeroClaw binary">
+    <Tabs>
+      <Tab title="64-bit (aarch64)">
+        ```bash
+        curl -LO https://github.com/zeroclaw-labs/zeroclaw/releases/latest/download/zeroclaw-aarch64-linux-android.tar.gz
+        tar xzf zeroclaw-aarch64-linux-android.tar.gz
+        ```
+      </Tab>
+      <Tab title="32-bit (armv7)">
+        ```bash
+        curl -LO https://github.com/zeroclaw-labs/zeroclaw/releases/latest/download/zeroclaw-armv7-linux-androideabi.tar.gz
+        tar xzf zeroclaw-armv7-linux-androideabi.tar.gz
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Install and verify">
+    ```bash
+    chmod +x zeroclaw
+    mv zeroclaw $PREFIX/bin/
+
+    # Verify installation
+    zeroclaw --version
+
+    # Run initial setup
+    zeroclaw onboard
+    ```
+  </Step>
+</Steps>
+
+## Direct installation via ADB
+
+For advanced users who want to run ZeroClaw outside Termux:
+
+```bash
+# From your computer with ADB connected
+adb push zeroclaw /data/local/tmp/
+adb shell chmod +x /data/local/tmp/zeroclaw
+adb shell /data/local/tmp/zeroclaw --version
+```
+
+<Warning>
+Running ZeroClaw outside Termux requires a rooted device or specific system permissions for full functionality.
+</Warning>
+
+## Android-specific limitations
+
+| Limitation | Details |
+|---|---|
+| No systemd | Use Termux's `termux-services` package for daemon mode |
+| Storage access | Run `termux-setup-storage` to grant Termux access to shared storage |
+| Network binding | Some features may require Android VPN permission for local address binding |
+| USB peripheral discovery | `nusb` (USB device enumeration via VID/PID) is excluded on `target_os = "android"` |
+
+The `nusb` exclusion means `zeroclaw hardware discover` is not available when running on Android itself. To use USB-connected peripherals (STM32, ESP32), run ZeroClaw on a Linux or macOS host and connect to Android via ADB if needed.
+
+## Building from source
+
+To cross-compile ZeroClaw for Android on a Linux or macOS host:
+
+```bash
+# Add Android targets to your Rust toolchain
+rustup target add armv7-linux-androideabi aarch64-linux-android
+
+# Set NDK path (adjust to your NDK installation)
+export ANDROID_NDK_HOME=/path/to/ndk
+export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+
+# Build for 64-bit Android
+cargo build --release --target aarch64-linux-android
+
+# Build for 32-bit Android
+cargo build --release --target armv7-linux-androideabi
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title='"Permission denied" when running the binary'>
+    ```bash
+    chmod +x zeroclaw
+    ```
+  </Accordion>
+
+  <Accordion title='"not found" or linker errors'>
+    You downloaded a binary for the wrong architecture. Run `uname -m` in Termux to confirm your device's architecture, then download the matching binary.
+  </Accordion>
+
+  <Accordion title="Old Android (4.x)">
+    Use the `armv7-linux-androideabi` build. Ensure your device is running API level 16 or higher.
+  </Accordion>
+</AccordionGroup>

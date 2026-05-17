@@ -1,0 +1,225 @@
+---
+title: "Provider trait and custom AI model endpoints"
+description: "Connect ZeroClaw to any AI model via the Provider trait. Configure built-in providers or point to any OpenAI-compatible or Anthropic-compatible custom endpoint."
+---
+
+ZeroClaw routes every model call through a single `Provider` trait, so swapping backends requires only a config change — no code changes. Built-in providers cover the major hosted APIs and several local inference servers. Custom endpoints let you target any compatible gateway without writing Rust.
+
+## Provider trait
+
+The trait lives at `src/providers/traits.rs`. The only required method is `chat_with_system`. Everything else has default implementations that delegate to it.
+
+```rust
+// Required method — all other methods have defaults
+async fn chat_with_system(
+    &self,
+    system_prompt: Option<&str>,
+    message: &str,
+    model: &str,
+    temperature: f64,
+) -> Result<String>;
+
+// Default implementations provided:
+// simple_chat()          — calls chat_with_system with no system prompt
+// chat_with_history()    — calls chat_with_system with history serialized
+// capabilities()         — returns no native tool-calling by default
+// streaming methods      — return empty/error streams by default
+```
+
+## Built-in providers
+
+Use `zeroclaw providers` to list every provider available in your build, including aliases.
+
+<CardGroup cols={3}>
+  <Card title="anthropic" icon="robot">
+    Claude model family via the Anthropic API
+  </Card>
+  <Card title="openai" icon="robot">
+    GPT models via the OpenAI API
+  </Card>
+  <Card title="gemini" icon="robot">
+    Gemini models via Google AI Studio / Vertex
+  </Card>
+  <Card title="openrouter" icon="shuffle">
+    Multi-model routing gateway
+  </Card>
+  <Card title="azure_openai" icon="microsoft">
+    OpenAI models via Azure OpenAI Service
+  </Card>
+  <Card title="bedrock" icon="aws">
+    Amazon Bedrock model access
+  </Card>
+  <Card title="ollama" icon="server">
+    Local models via Ollama
+  </Card>
+  <Card title="llamacpp" icon="server">
+    Local inference via llama-server (alias: `llama.cpp`)
+  </Card>
+  <Card title="vllm" icon="server">
+    High-throughput local serving via vLLM
+  </Card>
+  <Card title="sglang" icon="server">
+    Structured generation via SGLang
+  </Card>
+  <Card title="copilot" icon="code">
+    GitHub Copilot backend
+  </Card>
+  <Card title="telnyx" icon="phone">
+    Telnyx AI inference API
+  </Card>
+  <Card title="glm" icon="robot">
+    Zhipu AI GLM model family
+  </Card>
+  <Card title="openai_codex" icon="code">
+    OpenAI Codex (legacy)
+  </Card>
+  <Card title="compatible" icon="plug">
+    Generic OpenAI-compatible endpoint
+  </Card>
+</CardGroup>
+
+## Switching providers in config
+
+Set `default_provider` in `~/.zeroclaw/config.toml`:
+
+```toml
+default_provider = "anthropic"
+default_model    = "claude-sonnet-4-7"
+api_key          = "sk-ant-..."
+```
+
+You can override the provider per-session with the `--provider` flag:
+
+```bash
+zeroclaw agent --provider openai -m "summarise this file"
+```
+
+## Custom OpenAI-compatible endpoints
+
+Prefix your base URL with `custom:` to route calls through any service that implements the OpenAI chat completions API:
+
+```toml
+default_provider = "custom:https://your-api.com"
+api_key          = "your-api-key"
+default_model    = "your-model-name"
+```
+
+<Note>
+The URL must include the scheme (`http://` or `https://`). ZeroClaw appends `/v1/chat/completions` automatically.
+</Note>
+
+### Examples
+
+<CodeGroup>
+```toml Local inference server
+default_provider = "custom:http://localhost:8080/v1"
+api_key          = "your-api-key-if-required"
+default_model    = "local-model"
+```
+
+```toml Cloud provider gateway
+default_provider = "custom:https://gateway.cloud-provider.com/v1"
+api_key          = "gateway-api-key"
+default_model    = "gpt-4"
+```
+</CodeGroup>
+
+## Custom Anthropic-compatible endpoints
+
+Prefix with `anthropic-custom:` for services that implement the Anthropic messages API — corporate proxies and self-hosted Anthropic-format gateways:
+
+```toml
+default_provider = "anthropic-custom:https://llm-proxy.corp.example.com"
+api_key          = "internal-token"
+default_model    = "claude-sonnet-4-6"
+```
+
+### Environment variable auth
+
+For both `custom:` and `anthropic-custom:` providers, supply the key via environment variable instead of the config file:
+
+```bash
+export API_KEY="your-api-key"
+# or:
+export ZEROCLAW_API_KEY="your-api-key"
+zeroclaw agent
+```
+
+## Local inference servers
+
+ZeroClaw ships first-class support for three local inference runtimes. None of them require an API key unless you explicitly configure the server to require one.
+
+<Tabs>
+  <Tab title="llama.cpp">
+    **Provider ID:** `llamacpp` (alias: `llama.cpp`)  
+    **Default endpoint:** `http://localhost:8080/v1`
+
+    ```bash
+    llama-server -hf ggml-org/gpt-oss-20b-GGUF --jinja -c 133000 \
+      --host 127.0.0.1 --port 8033
+    ```
+
+    ```toml
+    default_provider     = "llamacpp"
+    api_url              = "http://127.0.0.1:8033/v1"
+    default_model        = "ggml-org/gpt-oss-20b-GGUF"
+    default_temperature  = 0.7
+    ```
+
+    ```bash
+    zeroclaw models refresh --provider llamacpp
+    zeroclaw agent -m "hello"
+    ```
+  </Tab>
+  <Tab title="SGLang">
+    **Provider ID:** `sglang`  
+    **Default endpoint:** `http://localhost:30000/v1`
+
+    ```bash
+    python -m sglang.launch_server \
+      --model meta-llama/Llama-3.1-8B-Instruct --port 30000
+    ```
+
+    ```toml
+    default_provider    = "sglang"
+    default_model       = "meta-llama/Llama-3.1-8B-Instruct"
+    default_temperature = 0.7
+    ```
+
+    ```bash
+    zeroclaw models refresh --provider sglang
+    zeroclaw agent -m "hello"
+    ```
+  </Tab>
+  <Tab title="vLLM">
+    **Provider ID:** `vllm`  
+    **Default endpoint:** `http://localhost:8000/v1`
+
+    ```bash
+    vllm serve meta-llama/Llama-3.1-8B-Instruct
+    ```
+
+    ```toml
+    default_provider    = "vllm"
+    default_model       = "meta-llama/Llama-3.1-8B-Instruct"
+    default_temperature = 0.7
+    ```
+
+    ```bash
+    zeroclaw models refresh --provider vllm
+    zeroclaw agent -m "hello"
+    ```
+  </Tab>
+</Tabs>
+
+## `zeroclaw providers` command
+
+```bash
+zeroclaw providers          # list all registered providers and their aliases
+zeroclaw models refresh     # fetch available models from the active provider
+zeroclaw models refresh --provider <name>   # fetch from a specific provider
+```
+
+## Implementing a custom provider
+
+See [Adding providers, channels, tools, and peripherals](/contributing/adding-extensions) for the full trait signature and registration pattern.

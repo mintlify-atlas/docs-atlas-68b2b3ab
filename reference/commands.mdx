@@ -1,0 +1,465 @@
+---
+title: "ZeroClaw CLI command reference"
+description: "Complete reference for all ZeroClaw CLI commands, including onboard, agent, gateway, daemon, service, estop, cron, channel, skills, and more."
+---
+
+ZeroClaw exposes every runtime capability through a single `zeroclaw` binary. The sections below document each command, its subcommands, and the flags available. Run `zeroclaw <command> --help` at any time to see the flags your installed version supports.
+
+## All commands
+
+| Command        | Description                                                                         |
+| -------------- | ----------------------------------------------------------------------------------- |
+| `onboard`      | Initialize workspace and configuration (quick or interactive)                       |
+| `agent`        | Run an interactive chat session or send a single message                            |
+| `gateway`      | Start the webhook and WebSocket HTTP gateway                                        |
+| `daemon`       | Start the long-running autonomous runtime (gateway + channels + scheduler)          |
+| `service`      | Manage the user-level OS background service (systemd / OpenRC)                      |
+| `doctor`       | Run diagnostics and check daemon, scheduler, and channel freshness                  |
+| `status`       | Print the full system configuration and runtime summary                             |
+| `estop`        | Engage, inspect, and resume emergency-stop levels                                   |
+| `cron`         | Manage scheduled tasks                                                              |
+| `models`       | Refresh, list, and set provider model catalogs                                      |
+| `providers`    | List supported provider IDs and their aliases                                       |
+| `channel`      | List, start, and health-check channels; bind Telegram identities                    |
+| `integrations` | Inspect integration setup details                                                   |
+| `skills`       | List, audit, install, and remove skills                                             |
+| `migrate`      | Import data from other agent runtimes (currently OpenClaw)                          |
+| `config`       | Export the machine-readable configuration JSON Schema                               |
+| `completions`  | Generate shell completion scripts to stdout                                         |
+| `hardware`     | Discover and introspect USB hardware                                                |
+| `peripheral`   | Configure and flash hardware peripherals                                            |
+| `auth`         | Manage subscription auth profiles (OAuth, token-based)                             |
+| `memory`       | List, inspect, and clear agent memory entries                                       |
+
+---
+
+## `onboard`
+
+Initializes your `~/.zeroclaw/config.toml`. The default mode is a fast non-interactive setup; pass `--interactive` for a guided wizard.
+
+```bash
+# Quick setup (non-interactive)
+zeroclaw onboard --api-key <KEY> --provider openrouter --memory sqlite
+
+# Interactive wizard
+zeroclaw onboard --interactive
+
+# Overwrite an existing config without confirmation
+zeroclaw onboard --force
+
+# Repair channels and allowlists only
+zeroclaw onboard --channels-only
+
+# Full reset: backs up existing config dir and starts fresh
+zeroclaw onboard --reinit --interactive
+```
+
+**Flags**
+
+| Flag               | Description                                                                 |
+| ------------------ | --------------------------------------------------------------------------- |
+| `--interactive`    | Run the full guided wizard                                                  |
+| `--force`          | Overwrite an existing `config.toml` without confirmation                    |
+| `--reinit`         | Backup the config directory and create a fresh configuration (requires `--interactive`) |
+| `--channels-only`  | Reconfigure channels and allowlists only; preserves all other settings      |
+| `--api-key <KEY>`  | API key (quick mode only; ignored with `--interactive`)                     |
+| `--provider <ID>`  | Provider ID (default: `openrouter`)                                         |
+| `--model <ID>`     | Model ID override                                                           |
+| `--memory <TYPE>`  | Memory backend: `sqlite`, `lucid`, `markdown`, or `none` (default: `sqlite`) |
+
+<Note>
+In non-interactive environments, `onboard` refuses to overwrite an existing `config.toml` unless `--force` is passed. Running `--interactive` when a config already exists prompts you to choose between a full overwrite and a provider-only update that preserves channels, tunnels, memory, and hooks.
+</Note>
+
+---
+
+## `agent`
+
+Starts the AI agent loop. Without `--message`, the command opens an interactive REPL. With `--message`, it runs a single query and exits.
+
+```bash
+# Interactive session
+zeroclaw agent
+
+# Single-shot query
+zeroclaw agent -m "Summarize today's logs"
+
+# Override provider and model
+zeroclaw agent --provider anthropic --model claude-sonnet-4-20250514
+
+# Attach a hardware peripheral
+zeroclaw agent --peripheral nucleo-f401re:/dev/ttyACM0
+
+# Use a subscription auth profile
+zeroclaw agent --provider openai-codex -m "hello"
+zeroclaw agent --provider openai-codex --auth-profile openai-codex:work -m "hello"
+```
+
+**Flags**
+
+| Flag                       | Description                                                       |
+| -------------------------- | ----------------------------------------------------------------- |
+| `-m`, `--message <TEXT>`   | Single-message mode; skips the interactive REPL                   |
+| `-p`, `--provider <ID>`    | Provider to use                                                   |
+| `--model <ID>`             | Model to use                                                      |
+| `-t`, `--temperature <N>`  | Sampling temperature (0.0–2.0)                                    |
+| `--peripheral <BOARD:PATH>`| Attach a hardware peripheral (repeatable)                         |
+| `--auth-profile <ID>`      | Subscription auth profile in `<provider>:<profile_name>` format   |
+
+<Tip>
+In interactive chat you can ask for model routing changes in natural language—for example, "conversation uses kimi, coding uses gpt-5.3-codex"—and the agent will persist the routing via the `model_routing_config` tool.
+</Tip>
+
+---
+
+## `gateway`
+
+Starts the HTTP/WebSocket gateway that accepts incoming webhook events. Defaults to `127.0.0.1:42617`.
+
+```bash
+zeroclaw gateway                    # use config defaults
+zeroclaw gateway --port 9090        # custom port
+zeroclaw gateway --port 0           # random available port
+zeroclaw gateway --host 0.0.0.0     # bind all interfaces (requires tunnel or allow_public_bind = true)
+```
+
+**Subcommands**
+
+| Subcommand        | Description                          |
+| ----------------- | ------------------------------------ |
+| `start`           | Start the gateway server             |
+| `restart`         | Restart the gateway server           |
+| `get-paircode`    | Print the current pairing code       |
+
+---
+
+## `daemon`
+
+Launches the full autonomous runtime: gateway server, all configured channels, heartbeat monitor, and the cron scheduler. This is the recommended production invocation.
+
+```bash
+zeroclaw daemon                     # use config defaults
+zeroclaw daemon -p 9090             # gateway on port 9090
+zeroclaw daemon --host 127.0.0.1    # localhost only
+```
+
+**Flags**
+
+| Flag              | Description                                                  |
+| ----------------- | ------------------------------------------------------------ |
+| `-p`, `--port <N>`| Port for the gateway (0 = random)                            |
+| `--host <HOST>`   | Host to bind                                                 |
+
+---
+
+## `service`
+
+Manages the ZeroClaw background service. The init system is auto-detected (systemd on most Linux, OpenRC on Alpine).
+
+```bash
+zeroclaw service install
+zeroclaw service start
+zeroclaw service stop
+zeroclaw service restart
+zeroclaw service status
+zeroclaw service uninstall
+```
+
+```bash
+# Alpine Linux (OpenRC, system-wide)
+sudo zeroclaw service install
+sudo rc-update add zeroclaw default
+sudo rc-service zeroclaw start
+```
+
+| Init system   | Scope       | Config path                 | Privilege |
+| ------------- | ----------- | --------------------------- | --------- |
+| systemd       | User-level  | `~/.zeroclaw/config.toml`   | No sudo   |
+| OpenRC        | System-wide | `/etc/zeroclaw/config.toml` | sudo/root |
+
+---
+
+## `doctor`
+
+Runs diagnostics to verify daemon, scheduler, and channel health. The `traces` subcommand reads tool and model diagnostics from `observability.runtime_trace_path`.
+
+```bash
+zeroclaw doctor
+
+# Probe model catalogs
+zeroclaw doctor models
+zeroclaw doctor models --provider anthropic
+zeroclaw doctor models --use-cache
+
+# Inspect runtime traces
+zeroclaw doctor traces --limit 20
+zeroclaw doctor traces --event tool_call
+zeroclaw doctor traces --contains "error"
+zeroclaw doctor traces --id <TRACE_ID>
+```
+
+---
+
+## `status`
+
+Prints the full system configuration and a runtime summary including provider, model, memory backend, channel states, and gateway binding.
+
+```bash
+zeroclaw status
+```
+
+---
+
+## `estop`
+
+Engages and manages emergency-stop levels that constrain agent capabilities at runtime.
+
+<Warning>
+`estop` commands require `[security.estop].enabled = true` in `config.toml`. When `require_otp_to_resume = true`, resuming any level requires OTP validation.
+</Warning>
+
+```bash
+# Engage kill-all (default level)
+zeroclaw estop
+
+# Engage specific levels
+zeroclaw estop --level network-kill
+zeroclaw estop --level domain-block --domain "*.chase.com" --domain "*.paypal.com"
+zeroclaw estop --level tool-freeze --tool shell --tool browser
+
+# Inspect state
+zeroclaw estop status
+
+# Resume levels
+zeroclaw estop resume
+zeroclaw estop resume --network
+zeroclaw estop resume --domain "*.chase.com"
+zeroclaw estop resume --tool shell
+zeroclaw estop resume --otp 123456
+```
+
+**Levels**
+
+| Level          | Description                                          |
+| -------------- | ---------------------------------------------------- |
+| `kill-all`     | Halt all agent activity (default when no level given) |
+| `network-kill` | Block all outbound network access                    |
+| `domain-block` | Block specific domain patterns (repeatable)          |
+| `tool-freeze`  | Freeze specific tools (repeatable)                   |
+
+---
+
+## `cron`
+
+Manages scheduled tasks using cron expressions, RFC 3339 timestamps, durations, or fixed intervals. Cron expressions use the standard 5-field format: `min hour day month weekday`.
+
+<Note>
+Mutating schedule actions require `cron.enabled = true` in `config.toml`. Shell command payloads are validated by the security command policy before job persistence.
+</Note>
+
+```bash
+# List all scheduled tasks
+zeroclaw cron list
+
+# Add a recurring task with cron expression
+zeroclaw cron add '0 9 * * 1-5' 'Good morning' --tz America/New_York
+zeroclaw cron add '*/30 * * * *' 'Check system health'
+
+# Add a one-shot task at a specific time
+zeroclaw cron add-at 2025-01-15T14:00:00Z 'Send reminder'
+
+# Add an interval-based task (milliseconds)
+zeroclaw cron add-every 60000 'Ping heartbeat'
+
+# Add a delayed one-shot task
+zeroclaw cron once 30m 'Run backup in 30 minutes'
+
+# Manage tasks by ID
+zeroclaw cron remove <id>
+zeroclaw cron pause <id>
+zeroclaw cron resume <id>
+```
+
+---
+
+## `models`
+
+Manages the provider model catalog cache.
+
+```bash
+zeroclaw models refresh
+zeroclaw models refresh --provider anthropic
+zeroclaw models refresh --force
+
+zeroclaw models list
+zeroclaw models list --provider openrouter
+
+zeroclaw models set claude-sonnet-4-20250514
+
+zeroclaw models status
+```
+
+Live catalog refresh is supported for: `openrouter`, `openai`, `anthropic`, `groq`, `mistral`, `deepseek`, `xai`, `together-ai`, `gemini`, `ollama`, `llamacpp`, `sglang`, `vllm`, `astrai`, `venice`, `fireworks`, `cohere`, `moonshot`, `glm`, `zai`, `qwen`, and `nvidia`.
+
+---
+
+## `providers`
+
+Lists all supported provider IDs and their aliases, and shows the currently active provider.
+
+```bash
+zeroclaw providers
+```
+
+---
+
+## `channel`
+
+Manages the messaging channels that connect ZeroClaw to external platforms (Telegram, Discord, Slack, WhatsApp, Matrix, iMessage, Email, and others).
+
+```bash
+zeroclaw channel list
+zeroclaw channel start
+zeroclaw channel doctor
+
+# Bind a Telegram identity to the allowlist
+zeroclaw channel bind-telegram 123456789
+
+# Add or remove channels
+zeroclaw channel add telegram '{"bot_token":"...","name":"my-bot"}'
+zeroclaw channel remove my-bot
+```
+
+**In-chat runtime commands** (Telegram / Discord while the channel server is running):
+
+| Command           | Description                            |
+| ----------------- | -------------------------------------- |
+| `/models`         | List all available models              |
+| `/models <provider>` | List models for a specific provider |
+| `/model`          | Show the current model                 |
+| `/model <id>`     | Switch to a specific model             |
+| `/new`            | Start a new conversation               |
+
+The channel runtime hot-reloads changes to `default_provider`, `default_model`, `default_temperature`, `api_key`, `api_url`, and `reliability.*` settings from `config.toml` without a restart.
+
+---
+
+## `integrations`
+
+Inspects setup details for a named integration.
+
+```bash
+zeroclaw integrations info Telegram
+zeroclaw integrations info Slack
+```
+
+---
+
+## `skills`
+
+Manages user-defined capabilities packaged as skills. Every install runs a built-in static security audit before the skill is accepted.
+
+```bash
+zeroclaw skills list
+zeroclaw skills install https://github.com/example/my-skill
+zeroclaw skills install /path/to/local/skill
+zeroclaw skills audit /path/to/local/skill
+zeroclaw skills audit my-installed-skill
+zeroclaw skills remove my-skill
+```
+
+The security audit blocks:
+- Symlinks inside the skill package
+- Script-like files (`.sh`, `.bash`, `.zsh`, `.ps1`, `.bat`, `.cmd`)
+- High-risk shell payload snippets
+- Markdown links that escape the skill root or target remote script files
+
+Skill manifests (`SKILL.toml`) support `prompts` and `[[tools]]` entries; both are injected into the agent system prompt at runtime.
+
+---
+
+## `migrate`
+
+Imports agent data from other runtimes. Currently supports OpenClaw.
+
+```bash
+# Preview what would be imported
+zeroclaw migrate openclaw --dry-run
+
+# Run the migration
+zeroclaw migrate openclaw
+
+# Specify a custom source path
+zeroclaw migrate openclaw --source /path/to/openclaw
+```
+
+---
+
+## `config`
+
+Exports the machine-readable JSON Schema (draft 2020-12) for the full `config.toml` contract.
+
+```bash
+zeroclaw config schema
+zeroclaw config schema > schema.json
+```
+
+---
+
+## `completions`
+
+Generates shell completion scripts to stdout. The output is intentionally free of log or warning output so it can be sourced directly.
+
+<CodeGroup>
+
+```bash bash
+source <(zeroclaw completions bash)
+```
+
+```bash zsh
+zeroclaw completions zsh > ~/.zfunc/_zeroclaw
+```
+
+```bash fish
+zeroclaw completions fish > ~/.config/fish/completions/zeroclaw.fish
+```
+
+```bash powershell
+zeroclaw completions powershell
+```
+
+```bash elvish
+zeroclaw completions elvish
+```
+
+</CodeGroup>
+
+---
+
+## `hardware`
+
+Discovers and introspects connected USB hardware, identifies known development boards (STM32 Nucleo, Arduino, ESP32), and retrieves chip information via probe-rs / ST-Link.
+
+```bash
+zeroclaw hardware discover
+zeroclaw hardware introspect /dev/ttyACM0
+zeroclaw hardware info
+zeroclaw hardware info --chip STM32F401RETx
+```
+
+---
+
+## `peripheral`
+
+Manages hardware peripherals that expose tools to the agent (GPIO, sensors, actuators). Supported boards: `nucleo-f401re`, `rpi-gpio`, `esp32`, `arduino-uno`.
+
+```bash
+zeroclaw peripheral list
+zeroclaw peripheral add nucleo-f401re /dev/ttyACM0
+zeroclaw peripheral add rpi-gpio native
+zeroclaw peripheral flash
+zeroclaw peripheral flash --port /dev/cu.usbmodem12345
+zeroclaw peripheral setup-uno-q
+zeroclaw peripheral setup-uno-q --host 192.168.1.10
+zeroclaw peripheral flash-nucleo
+```

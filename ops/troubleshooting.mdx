@@ -1,0 +1,229 @@
+---
+title: "Troubleshooting common ZeroClaw issues"
+description: "Resolve installation failures, build problems, gateway errors, channel conflicts, and service mode issues in ZeroClaw with fast diagnostic steps."
+---
+
+This guide covers common setup and runtime failures and the fastest path to resolving each one. For any issue, run `zeroclaw doctor` first — it performs a full configuration and connectivity check and often identifies the root cause immediately.
+
+```bash
+zeroclaw doctor
+```
+
+If `doctor` does not surface the problem, use the category sections below to dig deeper.
+
+## Startup and installation issues
+
+<AccordionGroup>
+  <Accordion title="cargo not found">
+    **Symptom:** bootstrap exits with `cargo is not installed`.
+
+    Install Rust toolchain via the installer flag:
+
+    ```bash
+    ./install.sh --install-rust
+    ```
+
+    Or install directly from [rustup.rs](https://rustup.rs/).
+  </Accordion>
+
+  <Accordion title="Missing system build dependencies">
+    **Symptom:** build fails due to compiler or `pkg-config` errors.
+
+    ```bash
+    ./install.sh --install-system-deps
+    ```
+  </Accordion>
+
+  <Accordion title="Build fails on low-RAM or low-disk hosts">
+    **Symptoms:**
+    - `cargo build --release` is killed (`signal: 9`, OOM killer, or `cannot allocate memory`)
+    - Build crashes after adding swap because disk space runs out
+
+    Runtime memory is under 5 MB for common operations, but a full source build can require **2 GB RAM + swap** and **6+ GB free disk**. Enabling swap on a small disk avoids RAM OOM but can still fail from disk exhaustion.
+
+    <Steps>
+      <Step title="Use a prebuilt binary (preferred)">
+        ```bash
+        ./install.sh --prefer-prebuilt
+        ```
+
+        For binary-only mode with no source fallback:
+
+        ```bash
+        ./install.sh --prebuilt-only
+        ```
+      </Step>
+      <Step title="If you must compile from source">
+        Only add swap if you also have enough free disk for both swap and build output. Then limit cargo parallelism:
+
+        ```bash
+        CARGO_BUILD_JOBS=1 cargo build --release --locked
+        ```
+      </Step>
+      <Step title="Reduce heavy features">
+        When Matrix is not required, build with a smaller feature set:
+
+        ```bash
+        cargo build --release --locked --features hardware
+        ```
+      </Step>
+      <Step title="Cross-compile on a stronger machine">
+        Compile on a host with adequate resources and copy the binary to the target host.
+      </Step>
+    </Steps>
+  </Accordion>
+
+  <Accordion title="Build is very slow or appears stuck">
+    **Symptoms:**
+    - `cargo check` / `cargo build` appears stuck at `Checking zeroclaw` for a long time
+    - Repeated `Blocking waiting for file lock on package cache` or `build directory`
+
+    ZeroClaw's Matrix E2EE stack (`matrix-sdk`, `ruma`, `vodozemac`) is large and expensive to type-check. TLS and crypto native build scripts (`aws-lc-sys`, `ring`) add noticeable compile time. `rusqlite` with bundled SQLite compiles C code locally. Running multiple cargo jobs or worktrees in parallel causes lock contention.
+
+    Generate a timing report:
+
+    ```bash
+    cargo check --timings
+    ```
+
+    The report is written to `target/cargo-timings/cargo-timing.html`. Check for duplicate dependencies:
+
+    ```bash
+    cargo tree -d
+    ```
+
+    For faster local iteration when Matrix channel is not needed:
+
+    ```bash
+    cargo check
+    ```
+
+    To check with Matrix support:
+
+    ```bash
+    cargo check --features channel-matrix
+    ```
+
+    To check with Matrix, Lark, and hardware support:
+
+    ```bash
+    cargo check --features hardware,channel-matrix,channel-lark
+    ```
+
+    To find and stop competing cargo processes causing lock contention:
+
+    ```bash
+    pgrep -af "cargo (check|build|test)|cargo check|cargo build|cargo test"
+    ```
+  </Accordion>
+
+  <Accordion title="zeroclaw command not found after install">
+    **Symptom:** install succeeds but the shell cannot find `zeroclaw`.
+
+    ```bash
+    export PATH="$HOME/.cargo/bin:$PATH"
+    which zeroclaw
+    ```
+
+    Persist this in your shell profile (`~/.bashrc`, `~/.zshrc`, etc.) to survive new sessions.
+  </Accordion>
+</AccordionGroup>
+
+## Channel issues
+
+<AccordionGroup>
+  <Accordion title="Telegram conflict: terminated by other getUpdates request">
+    **Cause:** multiple pollers are using the same bot token.
+
+    Stop all extra `zeroclaw daemon` or `zeroclaw channel start` processes so only one runtime is active for that token.
+  </Accordion>
+
+  <Accordion title="Channel unhealthy in channel doctor">
+    Run the channel-specific health check:
+
+    ```bash
+    zeroclaw channel doctor
+    ```
+
+    Then verify the channel's credentials and allowlist fields in `~/.zeroclaw/config.toml`.
+  </Accordion>
+</AccordionGroup>
+
+## Gateway and auth issues
+
+<AccordionGroup>
+  <Accordion title="Gateway unreachable">
+    Run diagnostics:
+
+    ```bash
+    zeroclaw status
+    zeroclaw doctor
+    ```
+
+    Check `~/.zeroclaw/config.toml` for the following fields:
+
+    - `[gateway].host` — default `127.0.0.1`
+    - `[gateway].port` — default `42617`
+    - `allow_public_bind` — only set this when intentionally exposing LAN or public interfaces
+  </Accordion>
+
+  <Accordion title="Pairing or auth failures on webhook">
+    <Steps>
+      <Step title="Confirm pairing completed">
+        Ensure the `/pair` flow was completed successfully.
+      </Step>
+      <Step title="Verify bearer token">
+        Confirm the bearer token is current and has not expired.
+      </Step>
+      <Step title="Re-run diagnostics">
+        ```bash
+        zeroclaw doctor
+        ```
+      </Step>
+    </Steps>
+  </Accordion>
+</AccordionGroup>
+
+## Service mode issues
+
+<AccordionGroup>
+  <Accordion title="Service installed but not running">
+    Check service state:
+
+    ```bash
+    zeroclaw service status
+    ```
+
+    Restart the service:
+
+    ```bash
+    zeroclaw service stop
+    zeroclaw service start
+    ```
+
+    On Linux, inspect journald logs:
+
+    ```bash
+    journalctl --user -u zeroclaw.service -f
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Collecting diagnostics for a bug report
+
+If you are still stuck after following the steps above, collect these outputs before filing an issue:
+
+```bash
+zeroclaw --version
+zeroclaw status
+zeroclaw doctor
+zeroclaw channel doctor
+```
+
+Include your OS, install method, and sanitized config snippets with all secrets removed.
+
+## Install script
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw/master/install.sh | bash
+```

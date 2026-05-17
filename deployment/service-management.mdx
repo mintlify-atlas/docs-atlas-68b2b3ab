@@ -1,0 +1,218 @@
+---
+title: "Managing ZeroClaw as a background service"
+description: "Install and manage ZeroClaw as a systemd user-level service on Linux or a system-wide OpenRC service on Alpine, including config paths and log locations."
+---
+
+ZeroClaw can manage itself as a background service using your operating system's init system. On Linux distributions that run systemd, the service installs at the user level — no `sudo` required. On Alpine Linux (and other OpenRC-based distributions), the service installs system-wide and requires root. ZeroClaw auto-detects which init system is present and uses the correct backend automatically.
+
+| Init system | Scope | Config path | Requires sudo |
+|---|---|---|---|
+| **systemd** (default on Linux) | User-level | `~/.zeroclaw/config.toml` | No |
+| **OpenRC** (Alpine Linux) | System-wide | `/etc/zeroclaw/config.toml` | Yes |
+
+<Tabs>
+  <Tab title="systemd (Linux)">
+    Systemd is the default init system on most Linux distributions (Debian, Ubuntu, Fedora, Arch, and others). ZeroClaw installs as a **user-level** systemd unit, which means it runs under your own account with no elevated privileges.
+
+    <Steps>
+      <Step title="Install the service unit">
+        ```bash
+        zeroclaw service install
+        ```
+
+        This registers a `zeroclaw.service` unit file under `~/.config/systemd/user/` and enables it for your session.
+      </Step>
+
+      <Step title="Start the service">
+        ```bash
+        zeroclaw service start
+        ```
+      </Step>
+
+      <Step title="Check service status">
+        ```bash
+        zeroclaw service status
+        ```
+      </Step>
+
+      <Step title="Restart after config changes">
+        ```bash
+        zeroclaw service restart
+        ```
+      </Step>
+
+      <Step title="Stop the service">
+        ```bash
+        zeroclaw service stop
+        ```
+      </Step>
+
+      <Step title="Remove the service unit">
+        ```bash
+        zeroclaw service uninstall
+        ```
+      </Step>
+    </Steps>
+
+    ### Viewing logs on systemd
+
+    Systemd routes service output to the journal. Use `journalctl` to follow logs in real time:
+
+    ```bash
+    journalctl --user -u zeroclaw.service -f
+    ```
+
+    To view the last 100 lines without following:
+
+    ```bash
+    journalctl --user -u zeroclaw.service -n 100
+    ```
+  </Tab>
+
+  <Tab title="OpenRC (Alpine)">
+    On Alpine Linux, ZeroClaw uses OpenRC for system-wide service management. All operations require `sudo` or root access. The service runs under a dedicated `zeroclaw` system user (least privilege).
+
+    <Steps>
+      <Step title="Install the service (requires sudo)">
+        ```bash
+        sudo zeroclaw service install
+        ```
+
+        This creates:
+        - Init script: `/etc/init.d/zeroclaw`
+        - Config directory: `/etc/zeroclaw/`
+        - Log directory: `/var/log/zeroclaw/`
+
+        The installer automatically migrates existing runtime state from your user setup when available and sets correct ownership for the `zeroclaw` service user. If no prior state exists, create `/etc/zeroclaw/config.toml` before starting the service.
+      </Step>
+
+      <Step title="Add to the default runlevel">
+        ```bash
+        sudo rc-update add zeroclaw default
+        ```
+      </Step>
+
+      <Step title="Start the service">
+        ```bash
+        sudo rc-service zeroclaw start
+        ```
+      </Step>
+
+      <Step title="Verify the service is running">
+        ```bash
+        sudo rc-service zeroclaw status
+        ```
+      </Step>
+    </Steps>
+
+    ### Managing the OpenRC service
+
+    | Command | Description |
+    |---|---|
+    | `sudo rc-service zeroclaw start` | Start the daemon |
+    | `sudo rc-service zeroclaw stop` | Stop the daemon |
+    | `sudo rc-service zeroclaw restart` | Restart the daemon |
+    | `sudo rc-service zeroclaw status` | Check service status via rc-service |
+    | `sudo zeroclaw service status` | ZeroClaw status wrapper (reads `/etc/zeroclaw` config) |
+    | `sudo zeroclaw service stop` | Stop via ZeroClaw wrapper |
+    | `sudo zeroclaw service uninstall` | Remove init script and disable service |
+
+    ### Viewing logs on OpenRC
+
+    OpenRC routes service output to log files in `/var/log/zeroclaw/`:
+
+    | Log | Path |
+    |---|---|
+    | Access / stdout | `/var/log/zeroclaw/access.log` |
+    | Errors / stderr | `/var/log/zeroclaw/error.log` |
+
+    ```bash
+    sudo tail -f /var/log/zeroclaw/error.log
+    ```
+
+    ### Uninstalling on OpenRC
+
+    ```bash
+    sudo rc-service zeroclaw stop
+    sudo rc-update del zeroclaw default
+    sudo zeroclaw service uninstall
+    ```
+
+    <Warning>
+      OpenRC services are system-wide only — there is no user-level equivalent. All operations require `sudo` or root. If the `zeroclaw` system user does not exist, `sudo zeroclaw service install` will exit with instructions to create it.
+    </Warning>
+  </Tab>
+</Tabs>
+
+---
+
+## Config paths
+
+The config file location differs between init systems. Both files use the same TOML schema; the path is determined by which init system is active.
+
+<CodeGroup>
+
+```toml systemd (~/.zeroclaw/config.toml)
+api_key = "sk-..."
+default_provider = "openrouter"
+default_model = "anthropic/claude-sonnet-4-20250514"
+
+[gateway]
+port = 42617
+host = "127.0.0.1"
+```
+
+```toml OpenRC (/etc/zeroclaw/config.toml)
+api_key = "sk-..."
+default_provider = "openrouter"
+default_model = "anthropic/claude-sonnet-4-20250514"
+
+[gateway]
+port = 42617
+host = "127.0.0.1"
+```
+
+</CodeGroup>
+
+---
+
+## Incident response
+
+If the service becomes unhealthy, follow this sequence to restore it cleanly:
+
+```bash
+# 1. Snapshot current state
+zeroclaw status
+zeroclaw doctor
+zeroclaw channel doctor
+
+# 2. Check service status
+zeroclaw service status
+
+# 3. Restart cleanly
+zeroclaw service stop
+zeroclaw service start
+
+# 4. Verify recovery
+zeroclaw status
+zeroclaw channel doctor
+```
+
+If channels continue to fail after a restart, verify allowlists and credentials in your config file.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Running the daemon" icon="play" href="/deployment/running-daemon">
+    Foreground daemon, gateway, agent modes, and cron scheduling
+  </Card>
+  <Card title="Network configuration" icon="network-wired" href="/deployment/network">
+    Tunnel providers, public bind options, and reverse proxy setup
+  </Card>
+  <Card title="Docker" icon="docker" href="/deployment/docker">
+    Container-based deployment and sandboxed shell execution
+  </Card>
+  <Card title="Operations runbook" icon="book" href="/ops/monitoring">
+    Health checks, log inspection, and rollback procedures
+  </Card>
+</CardGroup>

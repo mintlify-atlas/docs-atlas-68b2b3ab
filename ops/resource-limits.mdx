@@ -1,0 +1,134 @@
+---
+title: "Resource limits and performance tuning"
+description: "Understand ZeroClaw's RAM footprint, build requirements, Docker resource limits, binary size optimization, and proposed cgroup and allocator controls."
+---
+
+ZeroClaw's runtime is deliberately lightweight — common operations use under 5 MB of RAM — but compile-time requirements are significantly higher. This page explains the gap between runtime and build-time resource needs, documents the currently proposed resource-limit mechanisms, and covers the configuration schema under active design.
+
+<Warning>
+  The resource limit configuration described on this page is a **proposal / roadmap** item and does not reflect current runtime behavior. For current runtime configuration, see the config reference, operations runbook, and troubleshooting guide.
+</Warning>
+
+## Runtime vs. build-time resource requirements
+
+| Phase | RAM | Disk |
+|---|---|---|
+| Runtime (common operations) | &lt;5 MB | minimal |
+| Full source build | 2 GB RAM + swap minimum, 4 GB+ recommended | 6+ GB free |
+
+The large build-time requirement comes from the Matrix E2EE stack (`matrix-sdk`, `ruma`, `vodozemac`), TLS and crypto native build scripts (`aws-lc-sys`, `ring`), and `rusqlite`'s bundled SQLite C compilation. The compiled binary itself is small; only the compilation process is expensive.
+
+<Note>
+  On constrained hosts, use `./install.sh --prefer-prebuilt` to skip compilation entirely. See the [troubleshooting guide](/ops/troubleshooting) for more detail.
+</Note>
+
+## The resource cap problem
+
+ZeroClaw currently enforces rate limiting (20 actions/hour) but has no hard resource caps. A runaway agent could:
+
+- Exhaust available memory
+- Spin CPU at 100%
+- Fill disk with logs or output
+
+The options below describe the approaches under consideration to address this.
+
+## Proposed resource limit mechanisms
+
+<AccordionGroup>
+  <Accordion title="Option 1: cgroups v2 (Linux, recommended)">
+    Automatically create a systemd cgroup for the ZeroClaw service with hard limits. This is the recommended approach for Linux deployments because enforcement happens at the kernel level.
+
+    Add resource directives to the systemd service unit:
+
+    ```bash
+    [Service]
+    MemoryMax=512M
+    CPUQuota=100%
+    IOReadBandwidthMax=/dev/sda 10M
+    IOWriteBandwidthMax=/dev/sda 10M
+    TasksMax=100
+    ```
+
+    This constrains the entire ZeroClaw process tree without requiring application-level changes.
+  </Accordion>
+
+  <Accordion title="Option 2: per-task CPU timeout via tokio">
+    Wrap async tasks with a timeout to prevent task starvation and runaway CPU usage.
+
+    ```rust
+    use tokio::time::{timeout, Duration};
+
+    pub async fn execute_with_timeout<F, T>(
+        fut: F,
+        cpu_time_limit: Duration,
+        memory_limit: usize,
+    ) -> Result<T>
+    where
+        F: Future<Output = Result<T>>,
+    {
+        // CPU timeout
+        timeout(cpu_time_limit, fut).await?
+    }
+    ```
+
+    This is low-effort and high-impact for preventing individual tasks from running indefinitely.
+  </Accordion>
+
+  <Accordion title="Option 3: custom global allocator for memory monitoring">
+    Track heap usage with a custom `GlobalAlloc` implementation and abort the process if a configured limit is exceeded.
+
+    ```rust
+    use std::alloc::{GlobalAlloc, Layout, System};
+
+    struct LimitedAllocator<A> {
+        inner: A,
+        max_bytes: usize,
+        used: std::sync::atomic::AtomicUsize,
+    }
+
+    unsafe impl<A: GlobalAlloc> GlobalAlloc for LimitedAllocator<A> {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            let current = self.used.fetch_add(layout.size(), std::sync::atomic::Ordering::Relaxed);
+            if current + layout.size() > self.max_bytes {
+                std::process::abort();
+            }
+            self.inner.alloc(layout)
+        }
+    }
+    ```
+
+    This gives fine-grained control over heap growth without relying on OS-level mechanisms.
+  </Accordion>
+</AccordionGroup>
+
+## Proposed config schema
+
+The following `[resources]` section is under design and not yet active in the runtime.
+
+```toml
+[resources]
+# Memory limits (in MB)
+max_memory_mb = 512
+max_memory_per_command_mb = 128
+
+# CPU limits
+max_cpu_percent = 50
+max_cpu_time_seconds = 60
+
+# Disk I/O limits
+max_log_size_mb = 100
+max_temp_storage_mb = 500
+
+# Process limits
+max_subprocesses = 10
+max_open_files = 100
+```
+
+## Implementation priority
+
+| Phase | Feature | Effort | Impact |
+|---|---|---|---|
+| P0 | Memory monitoring + kill | Low | High |
+| P1 | CPU timeout per command | Low | High |
+| P2 | cgroups integration (Linux) | Medium | Very High |
+| P3 | Disk I/O limits | Medium | Medium |

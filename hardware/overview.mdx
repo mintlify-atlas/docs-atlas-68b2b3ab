@@ -1,0 +1,159 @@
+---
+title: "ZeroClaw on edge hardware and embedded devices"
+description: "Run ZeroClaw on ARM64, x86, RISC-V, and armv7 — including $10 boards — with a unified Peripheral trait for STM32, Raspberry Pi GPIO, and USB-connected devices."
+---
+
+ZeroClaw is a single-binary Rust runtime that runs on any hardware you can deploy a process to: servers, SBCs, Android phones, and microcontrollers connected via USB. The same agent loop that runs on a Mac mini runs on a $10 Linux board, keeping startup under 10ms and RAM under 5MB on release builds.
+
+## Supported platforms
+
+ZeroClaw targets all major CPU architectures with a single binary-first workflow:
+
+| Architecture | Example hardware | Notes |
+|---|---|---|
+| `aarch64` (ARM64) | Raspberry Pi 4, Apple M-series, modern Android | Primary embedded target |
+| `x86_64` | Linux servers, Intel NUCs | Default CI target |
+| `riscv64gc` | SiFive, StarFive boards | Supported via cross-compilation |
+| `armv7` | Raspberry Pi 2, older Android phones | 32-bit ARM; API 16+ on Android |
+
+The benchmark below is normalized for a 0.8 GHz edge core (macOS arm64, Feb 2026 measurements on release builds):
+
+| | OpenClaw | NanoBot | PicoClaw | ZeroClaw |
+|---|---|---|---|---|
+| **Language** | TypeScript | Python | Go | Rust |
+| **RAM** | > 1 GB | > 100 MB | < 10 MB | **< 5 MB** |
+| **Startup (0.8 GHz)** | > 500 s | > 30 s | < 1 s | **< 10 ms** |
+| **Cost** | Mac Mini $599 | Linux SBC ~$50 | Linux board $10 | **Any hardware $10** |
+
+<Note>
+RAM figures are runtime memory for release builds. Build-time compilation requirements are higher. OpenClaw includes ~390 MB of Node.js runtime overhead not shown in the table.
+</Note>
+
+## Peripheral trait system
+
+Hardware boards are modelled as `Peripheral` implementations in `src/peripherals/traits.rs`. Each peripheral connects, exposes a list of `Tool` implementations (such as `gpio_read`, `gpio_write`, `adc_read`), and disconnects cleanly on shutdown.
+
+```rust
+#[async_trait]
+pub trait Peripheral: Send + Sync {
+    fn name(&self) -> &str;
+    fn board_type(&self) -> &str;  // e.g. "nucleo-f401re", "rpi-gpio"
+    async fn connect(&mut self) -> anyhow::Result<()>;
+    async fn disconnect(&mut self) -> anyhow::Result<()>;
+    async fn health_check(&self) -> bool;
+    /// Tools this peripheral provides (gpio_read, gpio_write, sensor_read, etc.)
+    fn tools(&self) -> Vec<Box<dyn Tool>>;
+}
+```
+
+At startup ZeroClaw reads `[peripherals]` from `config.toml`, constructs a `Peripheral` for each configured board, calls `connect()`, and merges the resulting tools into the agent's tool surface. The agent can then call `gpio_write` or `sensor_read` in response to natural language just as it calls any other tool.
+
+## Supported peripherals
+
+| Board | Transport | Tools exposed |
+|---|---|---|
+| `nucleo-f401re` (STM32) | Serial / USB CDC | `gpio_read`, `gpio_write`, `adc_read` |
+| `rpi-gpio` (Raspberry Pi) | Native (rppal / sysfs) | `gpio_read`, `gpio_write` |
+| `esp32` | Serial or WebSocket | `gpio_read`, `gpio_write`, `wifi`, `mqtt` |
+
+USB device discovery uses [nusb](https://github.com/nic-hartley/nusb) for VID/PID enumeration. Serial communication uses [tokio-serial](https://github.com/berkowski/tokio-serial) with a newline-delimited JSON protocol. Raspberry Pi GPIO uses [rppal](https://github.com/golemparts/rppal).
+
+<Warning>
+`nusb` (USB discovery) is excluded on `target_os = "android"`. Use host-mediated mode from a Linux or macOS host when working with Android targets.
+</Warning>
+
+## Hardware CLI commands
+
+### Discovery and introspection
+
+```bash
+# Enumerate all connected USB devices (VID/PID, architecture, name)
+zeroclaw hardware discover
+
+# Inspect a specific device: memory map, peripheral list
+zeroclaw hardware introspect /dev/ttyACM0
+
+# Read board info (chip name, architecture, memory map)
+zeroclaw hardware info
+```
+
+### Peripheral management
+
+```bash
+# List configured and detected peripherals
+zeroclaw peripheral list
+
+# Flash firmware to a Nucleo-F401RE via probe-rs
+zeroclaw peripheral flash-nucleo
+
+# Manage peripheral connections
+zeroclaw peripheral manage
+```
+
+### Agent with peripheral
+
+```bash
+# Attach a peripheral at runtime
+zeroclaw agent --peripheral nucleo-f401re:/dev/ttyACM0
+
+# Use a J-Link probe
+zeroclaw agent --probe jlink
+
+# Edge-native mode (ZeroClaw runs on the device itself)
+zeroclaw agent --mode edge
+```
+
+## Feature flags
+
+The hardware subsystem is gated behind feature flags to keep the default binary lean:
+
+```bash
+# Enable all hardware and peripheral support
+cargo build --release --features hardware
+
+# Enable hardware + probe-rs for memory read and flash
+cargo build --release --features hardware,probe
+
+# Enable hardware + Raspberry Pi native GPIO (rppal)
+cargo build --release --features hardware,peripheral-rpi
+```
+
+## Configuration
+
+Add boards to `~/.zeroclaw/config.toml` so the agent knows which hardware to connect:
+
+```toml
+[peripherals]
+enabled = true
+mode = "host"           # "edge" | "host"
+datasheet_dir = "docs/datasheets"  # RAG: board-specific docs for LLM context
+
+[[peripherals.boards]]
+board = "nucleo-f401re"
+transport = "serial"
+path = "/dev/ttyACM0"
+baud = 115200
+
+[[peripherals.boards]]
+board = "rpi-gpio"
+transport = "native"
+
+[[peripherals.boards]]
+board = "esp32"
+transport = "serial"
+path = "/dev/ttyUSB0"
+baud = 115200
+```
+
+Set `datasheet_dir` to a folder of `.md` or `.txt` files named by board (e.g. `nucleo-f401re.md`, `rpi-gpio.md`). ZeroClaw's RAG pipeline retrieves relevant snippets on hardware queries and injects them into the LLM context.
+
+## Dive deeper
+
+<CardGroup cols={2}>
+  <Card title="Running ZeroClaw on Android" icon="mobile" href="/hardware/android">
+    Install and run ZeroClaw on Android via Termux, including architecture selection and ADB deployment.
+  </Card>
+  <Card title="STM32, Raspberry Pi, and USB peripherals" icon="cpu" href="/hardware/embedded">
+    Flash firmware to a Nucleo-F401RE, configure RPi GPIO, and use probe-rs for memory introspection.
+  </Card>
+</CardGroup>

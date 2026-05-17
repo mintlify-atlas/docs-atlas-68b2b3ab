@@ -1,0 +1,139 @@
+{
+  "projectType": "infrastructure",
+  "projectName": "ZeroClaw",
+  "projectDescription": "A fast, small, fully autonomous AI assistant infrastructure runtime written in Rust — deploy anywhere, swap any provider, channel, tool, or memory backend with zero code changes.",
+  "theme": "aspen",
+  "primaryColor": "#E05A2B",
+  "lightColor": "#F5A07A",
+  "darkColor": "#A33A14",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/overview",
+              "configuration/providers",
+              "configuration/channels",
+              "configuration/memory"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/running-daemon",
+              "deployment/service-management",
+              "deployment/docker",
+              "deployment/network"
+            ]
+          },
+          {
+            "group": "Security",
+            "pages": [
+              "security/overview",
+              "security/sandboxing",
+              "security/gateway-pairing"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "ops/monitoring",
+              "ops/troubleshooting",
+              "ops/resource-limits"
+            ]
+          },
+          {
+            "group": "Hardware & Peripherals",
+            "pages": [
+              "hardware/overview",
+              "hardware/android",
+              "hardware/embedded"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "CLI Commands",
+            "pages": [
+              "reference/commands",
+              "reference/auth",
+              "reference/gateway-api"
+            ]
+          },
+          {
+            "group": "Extension Points",
+            "pages": [
+              "reference/providers",
+              "reference/channels-reference",
+              "reference/tools",
+              "reference/skills"
+            ]
+          },
+          {
+            "group": "Contributing",
+            "pages": [
+              "contributing/overview",
+              "contributing/adding-extensions",
+              "contributing/custom-providers"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Single Rust binary with <5MB RAM footprint and <10ms cold start",
+    "Trait-driven architecture: swap providers, channels, tools, and memory with config changes",
+    "Secure-by-default: gateway pairing, sandbox, filesystem scoping, encrypted secrets",
+    "70+ channel integrations (Telegram, Discord, Slack, WhatsApp, Matrix, Signal, and more)",
+    "Built-in hybrid memory search engine (SQLite FTS5 + vector embeddings)",
+    "Fully autonomous daemon mode with scheduled tasks (heartbeat, cron)",
+    "OpenAI-compatible and Anthropic-compatible custom provider endpoints",
+    "Hardware peripheral support (STM32, Raspberry Pi GPIO, USB discovery)",
+    "Python companion package (zeroclaw-tools) with LangGraph-based tool calling",
+    "AIEOS identity system support for portable AI personas"
+  ],
+  "publicApiSurface": [
+    "zeroclaw onboard",
+    "zeroclaw agent",
+    "zeroclaw gateway",
+    "zeroclaw daemon",
+    "zeroclaw service install/start/stop/status/uninstall",
+    "zeroclaw status",
+    "zeroclaw doctor",
+    "zeroclaw channel list/start/doctor/bind-telegram",
+    "zeroclaw auth login/status/refresh/use/paste-token",
+    "zeroclaw cron list/add/add-at/add-every/remove/update/pause/resume",
+    "zeroclaw skills list/install/remove/audit",
+    "zeroclaw migrate openclaw",
+    "zeroclaw providers",
+    "zeroclaw models refresh",
+    "zeroclaw integrations info",
+    "zeroclaw hardware discover/introspect/info",
+    "zeroclaw peripheral manage/flash",
+    "zeroclaw completions bash/zsh/fish/powershell/elvish",
+    "zeroclaw estop",
+    "Gateway API: GET /health, POST /pair, POST /webhook, GET|POST /whatsapp",
+    "Provider trait (src/providers/traits.rs)",
+    "Channel trait (src/channels/traits.rs)",
+    "Tool trait (src/tools/traits.rs)",
+    "Memory trait (src/memory/traits.rs)",
+    "RuntimeAdapter trait (src/runtime/traits.rs)",
+    "Observer trait (src/observability/traits.rs)",
+    "Peripheral trait (src/peripherals/traits.rs)"
+  ]
+}

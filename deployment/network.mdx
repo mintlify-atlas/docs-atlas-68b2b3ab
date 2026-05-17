@@ -1,0 +1,235 @@
+---
+title: "Network setup: tunnels, gateway, and reverse proxy"
+description: "Configure ZeroClaw's gateway host and port, tunnel providers (Cloudflare, Tailscale, ngrok, custom), reverse proxy setup, and secure public access options."
+---
+
+By default, the ZeroClaw gateway binds to `127.0.0.1:42617` and refuses connections from any other address. This is intentional: the gateway is not designed to be directly exposed to the public internet. Instead, ZeroClaw provides a tunnel subsystem that handles public exposure through secure, authenticated channels — Cloudflare Tunnel, Tailscale Funnel, ngrok, or any custom tunnel binary.
+
+## Gateway binding
+
+The gateway host and port are configured in `~/.zeroclaw/config.toml`:
+
+```toml
+[gateway]
+port = 42617
+host = "127.0.0.1"
+require_pairing = true
+allow_public_bind = false
+```
+
+ZeroClaw enforces two rules:
+
+1. It binds to `127.0.0.1` by default — nothing is reachable from outside the host.
+2. If you change `host` to `0.0.0.0`, you must also set `allow_public_bind = true`, otherwise ZeroClaw refuses to start.
+
+This prevents accidental public exposure when copying config snippets or changing the port.
+
+### Binding to the local network
+
+To allow other devices on your LAN to reach the gateway — for example, to pair a client or receive webhook calls from a local device — enable the public bind explicitly:
+
+```toml
+[gateway]
+host = "0.0.0.0"
+port = 42617
+allow_public_bind = true
+```
+
+```bash
+zeroclaw daemon --host 0.0.0.0 --port 42617
+```
+
+<Warning>
+  `allow_public_bind = true` exposes the gateway to every interface on your host. Use this only on trusted local networks. For public internet access, use a tunnel instead.
+</Warning>
+
+### Checking your exposure
+
+You can verify no unexpected ports are open by running nmap from another machine on your network:
+
+```bash
+nmap -p 1-65535 <your-host>
+```
+
+ZeroClaw binds to localhost only by default, so nothing should be reachable unless you have explicitly configured a tunnel or `allow_public_bind = true`.
+
+---
+
+## Tunnel providers
+
+ZeroClaw supports four tunnel providers out of the box, plus a `custom` option for any tunnel binary. Configure the active provider in your config:
+
+```toml
+[tunnel]
+provider = "none"   # "none", "cloudflare", "tailscale", "ngrok", "custom"
+```
+
+<Tabs>
+  <Tab title="Cloudflare">
+    Point Cloudflare Tunnel at `127.0.0.1:42617` in your Cloudflare dashboard, then set your webhook URL to the tunnel's public hostname.
+
+    ```toml
+    [tunnel]
+    provider = "cloudflare"
+    ```
+
+    Cloudflare Tunnel creates a persistent outbound connection from your host to Cloudflare's edge — no inbound port forwarding required.
+  </Tab>
+
+  <Tab title="Tailscale">
+    Tailscale Funnel exposes your gateway via a `*.ts.net` URL accessible from the public internet through the Tailscale network.
+
+    ```toml
+    [tunnel]
+    provider = "tailscale"
+    ```
+
+    Tailscale Funnel requires no firewall changes and traffic is authenticated at the Tailscale layer before reaching your host. This makes it a good default for self-hosted deployments.
+  </Tab>
+
+  <Tab title="ngrok">
+    ```toml
+    [tunnel]
+    provider = "ngrok"
+    ```
+
+    You can also run ngrok manually and pass the resulting HTTPS URL to your webhook provider:
+
+    ```bash
+    ngrok http 42617
+    # Use the HTTPS URL from ngrok output for your webhook
+    ```
+  </Tab>
+
+  <Tab title="custom / none">
+    If you are using a tunnel not listed above, set `provider = "custom"`. ZeroClaw will invoke your configured tunnel binary with the gateway port as an argument.
+
+    ```toml
+    [tunnel]
+    provider = "custom"
+    ```
+
+    Set `provider = "none"` to disable tunneling entirely. In this case, the gateway only accepts connections on `127.0.0.1` unless `allow_public_bind = true` is set.
+  </Tab>
+</Tabs>
+
+---
+
+## Channels that do not need a tunnel
+
+Not every channel requires a public-facing gateway. Telegram, Discord, Slack, Mattermost, Matrix, and Nostr all use **outbound connections** — ZeroClaw connects to external servers and relays. No inbound port or public IP is needed for these channels.
+
+| Channel | Inbound port required? |
+|---|---|
+| Telegram (polling) | No |
+| Discord | No |
+| Slack | No |
+| Mattermost | No |
+| Matrix (including E2EE) | No |
+| Nostr | No |
+| Gateway webhook (`/webhook`) | Yes |
+| WhatsApp Business Cloud API | Yes |
+| Nextcloud Talk | Yes |
+
+When using Telegram, ZeroClaw polls `https://api.telegram.org/bot{token}/getUpdates` at an interval. This works from behind NAT, on a Raspberry Pi, or in a home lab without any port forwarding.
+
+<Note>
+  The Telegram Bot API supports only one active poller per bot token. Do not run two ZeroClaw instances with the same token simultaneously — you will see `Conflict: terminated by other getUpdates request` in the logs. Use a single `zeroclaw daemon` service instance per token.
+</Note>
+
+---
+
+## OpenRC Alpine Linux deployment
+
+On Alpine Linux with OpenRC, network deployment follows this sequence:
+
+<Steps>
+  <Step title="Install the service">
+    ```bash
+    sudo zeroclaw service install
+    ```
+
+    This creates:
+    - Init script: `/etc/init.d/zeroclaw`
+    - Config directory: `/etc/zeroclaw/`
+    - Log directory: `/var/log/zeroclaw/`
+  </Step>
+
+  <Step title="Configure gateway and tunnel">
+    Edit `/etc/zeroclaw/config.toml`:
+
+    ```toml
+    [gateway]
+    host = "127.0.0.1"
+    port = 42617
+    allow_public_bind = false
+
+    [tunnel]
+    provider = "tailscale"   # or "ngrok", "cloudflare", "custom", "none"
+    ```
+  </Step>
+
+  <Step title="Add to the default runlevel and start">
+    ```bash
+    sudo rc-update add zeroclaw default
+    sudo rc-service zeroclaw start
+    ```
+  </Step>
+
+  <Step title="Verify status and check logs">
+    ```bash
+    sudo rc-service zeroclaw status
+    sudo tail -f /var/log/zeroclaw/error.log
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Reverse proxy setup
+
+If you prefer to terminate TLS at a reverse proxy (nginx, Caddy, Traefik) and forward traffic to ZeroClaw, keep the gateway on `127.0.0.1` and point your proxy at port `42617`. Keep `allow_public_bind = false` in your ZeroClaw config — the reverse proxy handles all external traffic and ZeroClaw only sees local connections from the proxy.
+
+Example nginx location block:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:42617;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+---
+
+## Security considerations
+
+- **Never set `host = "0.0.0.0"` without a tunnel or trusted LAN context.** The gateway is protected by bearer-token pairing, but defense in depth means the port should not be reachable at all from untrusted networks.
+- **`require_pairing = true`** (the default) means every new client must exchange a 6-digit one-time code for a bearer token before any `/webhook` request is accepted.
+- **Use a tunnel for WhatsApp and other webhook-based channels.** These require a public HTTPS URL. Tunnels handle TLS termination and keep your host unexposed.
+- **Run `nmap -p 1-65535 <your-host>`** from an external machine after setup to confirm no unexpected ports are open.
+
+## Port reference
+
+| Port | Service | Notes |
+|---|---|---|
+| `42617` | ZeroClaw gateway | Default; configurable via `[gateway].port` or `ZEROCLAW_GATEWAY_PORT` |
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Running the daemon" icon="play" href="/deployment/running-daemon">
+    Daemon, gateway, and agent modes explained
+  </Card>
+  <Card title="Service management" icon="server" href="/deployment/service-management">
+    systemd and OpenRC background service setup
+  </Card>
+  <Card title="Docker" icon="docker" href="/deployment/docker">
+    Container-based deployment and sandboxed tool execution
+  </Card>
+  <Card title="Security overview" icon="shield" href="/security/overview">
+    Gateway pairing, sandbox, allowlists, and filesystem scoping
+  </Card>
+</CardGroup>

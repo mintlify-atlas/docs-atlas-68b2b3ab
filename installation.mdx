@@ -1,0 +1,247 @@
+---
+title: "Installing ZeroClaw on Linux, macOS, and Windows"
+description: "Install ZeroClaw via Homebrew, the one-line bootstrap script, pre-built binaries for ARM64/x86/macOS/Windows, or build from source with Cargo."
+---
+
+ZeroClaw ships as a single static binary with no mandatory runtime dependencies. Choose the installation method that fits your platform and constraints.
+
+## Prerequisites
+
+<Tabs>
+  <Tab title="Linux">
+    Install build essentials and the Rust toolchain before building from source. Pre-built binaries do not require these steps.
+
+    **Debian / Ubuntu:**
+
+    ```bash
+    sudo apt install build-essential pkg-config
+    ```
+
+    **Fedora / RHEL:**
+
+    ```bash
+    sudo dnf group install development-tools && sudo dnf install pkg-config
+    ```
+
+    **Rust toolchain (all Linux distributions):**
+
+    ```bash
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    ```
+
+    Verify both tools are available:
+
+    ```bash
+    rustc --version
+    cargo --version
+    ```
+  </Tab>
+  <Tab title="macOS">
+    Install Xcode Command Line Tools and the Rust toolchain before building from source. Pre-built binaries and Homebrew do not require these steps.
+
+    **Xcode Command Line Tools:**
+
+    ```bash
+    xcode-select --install
+    ```
+
+    **Rust toolchain:**
+
+    ```bash
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    ```
+
+    Verify both tools are available:
+
+    ```bash
+    rustc --version
+    cargo --version
+    ```
+  </Tab>
+  <Tab title="Windows">
+    **Visual Studio Build Tools** (provides the MSVC linker and Windows SDK):
+
+    ```powershell
+    winget install Microsoft.VisualStudio.2022.BuildTools
+    ```
+
+    During installation, select the **Desktop development with C++** workload.
+
+    **Rust toolchain:**
+
+    ```powershell
+    winget install Rustlang.Rustup
+    ```
+
+    After installation, open a new terminal and run `rustup default stable`. Verify both tools:
+
+    ```powershell
+    rustc --version
+    cargo --version
+    ```
+  </Tab>
+</Tabs>
+
+### Build resource requirements
+
+Compiling from source requires significantly more resources than running the resulting binary:
+
+| Resource | Minimum | Recommended |
+|---|---|---|
+| **RAM + swap** | 2 GB | 4 GB+ |
+| **Free disk** | 6 GB | 10 GB+ |
+
+If your host is below the minimum, use a pre-built binary instead.
+
+## Installation methods
+
+### Homebrew
+
+The simplest option on macOS or any machine with Linuxbrew installed:
+
+```bash
+brew install zeroclaw
+```
+
+### One-line bootstrap script
+
+The bootstrap script installs system dependencies, the Rust toolchain (if missing), and ZeroClaw in a single step. It defaults to building from source but can download pre-built binaries when resources are constrained.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw/master/install.sh | bash
+```
+
+<Warning>
+  In security-sensitive environments, clone the repository first and inspect `install.sh` before executing it. The remote one-liner pipes directly to bash without a review step.
+</Warning>
+
+**Common bootstrap flags:**
+
+```bash
+# Install system dependencies and Rust on a fresh machine
+./install.sh --install-system-deps --install-rust
+
+# Try pre-built binary first; fall back to source build if unavailable
+./install.sh --prefer-prebuilt
+
+# Binary-only install — fail if no compatible release asset exists
+./install.sh --prebuilt-only
+
+# Install and run onboarding in the same step
+./install.sh --onboard --api-key "sk-..." --provider openrouter
+
+# Run install + onboarding inside a Docker container
+./install.sh --docker
+```
+
+See all available flags:
+
+```bash
+./install.sh --help
+```
+
+### Pre-built binaries
+
+Release assets are published for the following targets:
+
+- **Linux:** `x86_64`, `aarch64`, `armv7`
+- **macOS:** `x86_64`, `aarch64`
+- **Windows:** `x86_64`
+
+Download from the [latest release](https://github.com/zeroclaw-labs/zeroclaw/releases/latest).
+
+**Example — ARM64 Linux:**
+
+```bash
+curl -fsSLO https://github.com/zeroclaw-labs/zeroclaw/releases/latest/download/zeroclaw-aarch64-unknown-linux-gnu.tar.gz
+tar xzf zeroclaw-aarch64-unknown-linux-gnu.tar.gz
+install -m 0755 zeroclaw "$HOME/.cargo/bin/zeroclaw"
+```
+
+After installing, ensure `~/.cargo/bin` is on your `PATH`:
+
+```bash
+export PATH="$HOME/.cargo/bin:$PATH"
+```
+
+### Build from source
+
+Clone the repository and build with Cargo:
+
+```bash
+git clone https://github.com/zeroclaw-labs/zeroclaw.git
+cd zeroclaw
+cargo build --release --locked
+cargo install --path . --force --locked
+```
+
+<Note>
+  The default `cargo build --release` uses `codegen-units=1` to reduce peak compile-time memory pressure. For faster builds on machines with ample RAM, use `cargo build --profile release-fast` instead.
+</Note>
+
+Add `~/.cargo/bin` to your `PATH` if it is not already present:
+
+```bash
+export PATH="$HOME/.cargo/bin:$PATH"
+```
+
+Verify the installation:
+
+```bash
+zeroclaw --version
+```
+
+## Shell completions
+
+ZeroClaw can generate completion scripts for bash, zsh, fish, PowerShell, and Elvish.
+
+<Tabs>
+  <Tab title="bash">
+    Source completions for the current session:
+
+    ```bash
+    source <(zeroclaw completions bash)
+    ```
+
+    To persist across sessions, add the line above to your `~/.bashrc`.
+  </Tab>
+  <Tab title="zsh">
+    Write completions to a file in your `fpath`:
+
+    ```bash
+    zeroclaw completions zsh > ~/.zfunc/_zeroclaw
+    ```
+
+    Ensure `~/.zfunc` is in your `fpath` by adding this to `~/.zshrc` before calling `compinit`:
+
+    ```bash
+    fpath=(~/.zfunc $fpath)
+    autoload -Uz compinit && compinit
+    ```
+  </Tab>
+  <Tab title="fish">
+    Write completions to the fish completions directory:
+
+    ```bash
+    zeroclaw completions fish > ~/.config/fish/completions/zeroclaw.fish
+    ```
+  </Tab>
+  <Tab title="PowerShell">
+    Generate and register completions in your PowerShell profile:
+
+    ```powershell
+    zeroclaw completions powershell | Out-String | Invoke-Expression
+    ```
+  </Tab>
+</Tabs>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Onboard, send your first message, and start the daemon
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration/overview">
+    Configure providers, channels, memory, and autonomy settings
+  </Card>
+</CardGroup>

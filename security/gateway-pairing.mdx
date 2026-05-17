@@ -1,0 +1,95 @@
+---
+title: "Gateway pairing and bearer token auth"
+description: "How ZeroClaw's one-time pairing code flow works, how to exchange it for a bearer token, and the full gateway API endpoint reference."
+---
+
+ZeroClaw's gateway binds to `127.0.0.1` by default and requires a pairing step before accepting any webhook requests. This prevents unauthenticated access even from other processes on the same machine.
+
+## How pairing works
+
+When the gateway starts, it generates a 6-digit one-time pairing code and prints it to stdout. You exchange this code for a bearer token by making a single HTTP request. All subsequent webhook calls use that bearer token.
+
+<Steps>
+  <Step title="Start the gateway">
+    ```bash
+    zeroclaw gateway
+    ```
+
+    The 6-digit pairing code is printed to the terminal on startup.
+  </Step>
+  <Step title="Exchange the code for a bearer token">
+    Send a `POST` request to `/pair` with the code in the `X-Pairing-Code` header:
+
+    ```bash
+    curl -X POST http://127.0.0.1:42617/pair \
+      -H "X-Pairing-Code: 123456"
+    ```
+
+    The response contains your bearer token.
+  </Step>
+  <Step title="Use the bearer token for all webhook requests">
+    Include the token in the `Authorization` header on every call to `/webhook`:
+
+    ```bash
+    curl -X POST http://127.0.0.1:42617/webhook \
+      -H "Authorization: Bearer <token>" \
+      -H "Content-Type: application/json" \
+      -d '{"message": "your prompt"}'
+    ```
+  </Step>
+</Steps>
+
+<Note>
+The pairing code is one-time use. Once exchanged for a bearer token, it cannot be reused. Restart the gateway to generate a new pairing code.
+</Note>
+
+## Configuration
+
+Pairing is enabled by default. The relevant gateway config options are:
+
+```toml
+[gateway]
+port = 42617
+host = "127.0.0.1"
+require_pairing = true
+allow_public_bind = false
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `require_pairing` | `true` | Require the one-time pairing exchange before accepting webhook requests |
+| `allow_public_bind` | `false` | Allow binding to `0.0.0.0`; refused unless a tunnel is active or this is explicitly set to `true` |
+| `host` | `127.0.0.1` | Interface to bind the gateway to |
+| `port` | `42617` | Port the gateway listens on |
+
+<Warning>
+Setting `allow_public_bind = true` exposes the gateway to your network. Only use this if you have an additional network-level control in place, such as a firewall or VPN.
+</Warning>
+
+## Idempotent requests
+
+To avoid processing duplicate webhook messages, include an `X-Idempotency-Key` header with a unique value per request:
+
+```bash
+curl -X POST http://127.0.0.1:42617/webhook \
+  -H "Authorization: Bearer <token>" \
+  -H "X-Idempotency-Key: req-a1b2c3d4" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "your prompt"}'
+```
+
+Requests with the same idempotency key are deduplicated — the gateway returns the cached response without re-running the agent.
+
+## Gateway API reference
+
+| Endpoint | Method | Auth | Description |
+|----------|--------|------|-------------|
+| `/health` | GET | None | Health check. Always public; no secrets leaked in the response. |
+| `/pair` | POST | `X-Pairing-Code` header | Exchange the one-time code for a bearer token. |
+| `/webhook` | POST | `Authorization: Bearer <token>` | Send a message to the agent: `{"message": "your prompt"}`. Accepts optional `X-Idempotency-Key` header. |
+| `/whatsapp` | GET | Query params (`hub.mode`, `hub.verify_token`, `hub.challenge`) | Meta webhook verification endpoint. |
+| `/whatsapp` | POST | `X-Hub-Signature-256` (when app secret is configured) | Incoming WhatsApp message webhook. |
+
+<Tip>
+`/health` is intentionally unauthenticated so monitoring tools can check liveness without a bearer token. It never returns configuration values, API keys, or other sensitive data.
+</Tip>

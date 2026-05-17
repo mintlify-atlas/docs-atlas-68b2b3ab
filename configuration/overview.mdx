@@ -1,0 +1,160 @@
+---
+title: 'ZeroClaw configuration file overview and core options'
+description: 'Learn where ZeroClaw stores its config file, how to create it with zeroclaw onboard, and what the top-level keys and hot-reload fields do.'
+---
+
+ZeroClaw reads all of its settings from a single TOML file at `~/.zeroclaw/config.toml`. This file is created for you when you run `zeroclaw onboard`, and the runtime logs the resolved path at `INFO` level on every startup. Once the file exists you can edit it by hand at any time — many fields are applied on the next inbound channel message without a restart.
+
+## Creating the config file
+
+<Steps>
+  <Step title="Run the onboarding wizard">
+    ```bash
+    zeroclaw onboard
+    ```
+    This creates `~/.zeroclaw/config.toml` with your provider, model, and API key already filled in. Pass `--api-key`, `--provider`, and `--model` to skip prompts.
+  </Step>
+  <Step title="Verify the config was written">
+    ```bash
+    zeroclaw status
+    zeroclaw doctor
+    ```
+    `status` prints the resolved config path and workspace. `doctor` runs a full health check including channel freshness and scheduler state.
+  </Step>
+</Steps>
+
+<Note>
+  Config path resolution at startup follows this order: `ZEROCLAW_WORKSPACE` environment variable, then the `~/.zeroclaw/active_workspace.toml` marker file (if present), then the default `~/.zeroclaw/config.toml`. You can also export the full JSON Schema with `zeroclaw config schema`.
+</Note>
+
+## Top-level keys
+
+These four keys sit at the root of `config.toml` and control which provider, model, and temperature the agent uses by default.
+
+<ParamField path="api_key" type="string">
+  API key for the selected provider. Overridden at runtime by the `ZEROCLAW_API_KEY` or `API_KEY` environment variable. Store file: `~/.zeroclaw/auth-profiles.json` when using subscription auth profiles.
+</ParamField>
+
+<ParamField path="default_provider" type="string" default="openrouter">
+  Provider ID or alias. Examples: `openrouter`, `anthropic`, `ollama`, `custom:https://your-api.com`. See the [Providers](/configuration/providers) page for the full catalog.
+</ParamField>
+
+<ParamField path="default_model" type="string" default="anthropic/claude-sonnet-4-6">
+  Model routed through the selected provider. The exact format depends on the provider (for example `anthropic/claude-sonnet-4-6` on OpenRouter, `llama3.2` on Ollama).
+</ParamField>
+
+<ParamField path="default_temperature" type="number" default="0.7">
+  Sampling temperature for the model. Accepts values from `0.0` to `2.0`. Values outside this range are rejected at parse time.
+</ParamField>
+
+<ParamField path="api_url" type="string">
+  Base URL override for the provider API. Required for remote Ollama, llama.cpp, vLLM, and custom endpoints.
+</ParamField>
+
+## Hot-reload fields
+
+When `zeroclaw channel start` or `zeroclaw daemon` is already running, you do not need to restart the process to pick up changes to these fields. ZeroClaw re-reads them from `config.toml` on the next inbound channel message:
+
+- `default_provider`
+- `default_model`
+- `default_temperature`
+- `api_key`
+- `api_url`
+- All `reliability.*` keys
+
+All other fields (memory backend, channel credentials, gateway settings, autonomy policy) require a process restart to take effect.
+
+## Complete config.toml example
+
+The block below shows every top-level section with annotated defaults. You do not need all sections — omit any that you do not use.
+
+```toml
+api_key = "sk-..."
+default_provider = "openrouter"
+default_model = "anthropic/claude-sonnet-4-6"
+default_temperature = 0.7
+
+# Custom OpenAI-compatible endpoint
+# default_provider = "custom:https://your-api.com"
+
+# Custom Anthropic-compatible endpoint
+# default_provider = "anthropic-custom:https://your-api.com"
+
+[memory]
+backend = "sqlite"             # "sqlite", "lucid", "postgres", "markdown", "none"
+auto_save = true
+embedding_provider = "none"    # "none", "openai", "custom:https://..."
+vector_weight = 0.7
+keyword_weight = 0.3
+
+# Optional PostgreSQL storage-provider override
+# [storage.provider.config]
+# provider = "postgres"
+# db_url = "postgres://user:password@host:5432/zeroclaw"
+# schema = "public"
+# table = "memories"
+# connect_timeout_secs = 15
+
+[gateway]
+port = 42617
+host = "127.0.0.1"
+require_pairing = true
+allow_public_bind = false
+
+[autonomy]
+level = "supervised"           # "readonly", "supervised", "full"
+workspace_only = true
+allowed_commands = ["git", "npm", "cargo", "ls", "cat", "grep"]
+forbidden_paths = ["/etc", "/root", "/proc", "/sys", "~/.ssh", "~/.gnupg", "~/.aws"]
+allowed_roots = []
+
+[runtime]
+kind = "native"                # "native" or "docker"
+
+[runtime.docker]
+image = "alpine:3.20"
+network = "none"
+memory_limit_mb = 512
+cpu_limit = 1.0
+read_only_rootfs = true
+mount_workspace = true
+
+[heartbeat]
+enabled = false
+interval_minutes = 30
+message = "Check London time"
+target = "telegram"
+to = "123456789"
+
+[tunnel]
+provider = "none"              # "none", "cloudflare", "tailscale", "ngrok", "custom"
+
+[secrets]
+encrypt = true
+
+[browser]
+enabled = false
+allowed_domains = ["docs.rs"]
+backend = "agent_browser"
+
+[composio]
+enabled = false
+entity_id = "default"
+
+[identity]
+format = "openclaw"            # "openclaw" or "aieos"
+```
+
+## See also
+
+<Columns cols={3}>
+  <Card title="Providers" icon="cpu" href="/configuration/providers">
+    Full provider catalog, custom endpoints, and subscription auth profiles.
+  </Card>
+  <Card title="Channels" icon="message-circle" href="/configuration/channels">
+    Telegram, Discord, WhatsApp, and all other supported messaging channels.
+  </Card>
+  <Card title="Memory" icon="database" href="/configuration/memory">
+    SQLite, PostgreSQL, Lucid, and Markdown memory backends with embedding options.
+  </Card>
+</Columns>

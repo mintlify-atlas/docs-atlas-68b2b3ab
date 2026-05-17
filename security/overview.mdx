@@ -1,0 +1,94 @@
+---
+title: "ZeroClaw security model and checklist"
+description: "A complete reference to ZeroClaw's layered security model: gateway pairing, filesystem scoping, channel allowlists, and encrypted secrets."
+---
+
+ZeroClaw enforces security at every layer — not just the sandbox. It passes all items from the community security checklist, covering network exposure, authentication, filesystem access, and inbound message control.
+
+## Security checklist
+
+| # | Item | Status | How |
+|---|------|--------|-----|
+| 1 | **Gateway not publicly exposed** | ✅ | Binds `127.0.0.1` by default. Refuses `0.0.0.0` without a tunnel or explicit `allow_public_bind = true`. |
+| 2 | **Pairing required** | ✅ | 6-digit one-time code on startup. Exchange via `POST /pair` for a bearer token. All `/webhook` requests require `Authorization: Bearer <token>`. |
+| 3 | **Filesystem scoped (no /)** | ✅ | `workspace_only = true` by default. 14 system dirs + 4 sensitive dotfiles blocked. Null byte injection blocked. Symlink escape detection via canonicalization and resolved-path workspace checks in file read/write tools. |
+| 4 | **Access via tunnel only** | ✅ | Gateway refuses public bind without an active tunnel. Supports Tailscale, Cloudflare, ngrok, or any custom tunnel. |
+
+<Tip>
+Run your own scan to verify: `nmap -p 1-65535 <your-host>` — ZeroClaw binds to localhost only, so nothing is exposed unless you explicitly configure a tunnel.
+</Tip>
+
+## Channel allowlists
+
+Inbound sender policy is deny-by-default across all channels:
+
+- **Empty allowlist** — deny all inbound messages
+- **`"*"`** — allow all (explicit opt-in)
+- **Any other value** — exact-match allowlist
+
+This keeps accidental exposure low. Recommended low-friction setup for each channel:
+
+| Channel | Allowlist value |
+|---------|----------------|
+| Telegram | Your `@username` (without `@`) or your numeric user ID |
+| Discord | Your Discord user ID |
+| Slack | Your Slack member ID (starts with `U`) |
+| Mattermost | Your Mattermost user ID |
+| Nostr | Your sender public key (hex or npub) |
+
+<Warning>
+Use `"*"` only for temporary open testing. It disables inbound filtering entirely.
+</Warning>
+
+### Telegram operator-approval flow
+
+When `allowed_users` is empty, unauthorized senders receive a hint with a copyable operator command. The operator runs the command locally, then the user retries.
+
+<Steps>
+  <Step title="Start with deny-by-default">
+    Set `[channels_config.telegram].allowed_users = []` before starting the agent.
+  </Step>
+  <Step title="Receive the approval hint">
+    An unauthorized user gets a message with the exact command to run:
+
+    ```bash
+    zeroclaw channel bind-telegram <IDENTITY>
+    ```
+  </Step>
+  <Step title="Operator approves">
+    Run the command locally to add the identity to the allowlist.
+  </Step>
+  <Step title="User retries">
+    The user sends their message again and is now authorized.
+  </Step>
+</Steps>
+
+If you need a one-shot manual approval:
+
+```bash
+zeroclaw channel bind-telegram 123456789
+```
+
+If you are unsure which identity to add, send one message to your bot, read the warning log to see the exact sender identity, then add that value to the allowlist.
+
+If you see `ignoring message from unauthorized user` in logs, rerun channel setup only:
+
+```bash
+zeroclaw onboard --channels-only
+```
+
+## Encrypted secrets
+
+API keys and credentials are encrypted at rest using a local key file when `[secrets].encrypt = true` (the default):
+
+```toml
+[secrets]
+encrypt = true
+```
+
+When enabled, any `api_key` value stored in config is encrypted before being written to disk. The key file never leaves the local machine.
+
+## Related pages
+
+- [Sandboxing: filesystem scoping and runtime isolation](/security/sandboxing) — `workspace_only`, blocked paths, Docker runtime, and Linux Landlock
+- [Gateway pairing and bearer token auth](/security/gateway-pairing) — how pairing works, bearer tokens, and the full gateway API reference

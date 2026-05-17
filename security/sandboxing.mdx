@@ -1,0 +1,127 @@
+---
+title: "Sandboxing: filesystem scoping and runtime isolation"
+description: "How ZeroClaw scopes filesystem access to the workspace, blocks sensitive paths, prevents injection attacks, and optionally adds OS-level sandboxing."
+---
+
+ZeroClaw applies filesystem scoping at the application layer by default, blocking access to system directories and sensitive dotfiles regardless of which commands the agent runs. Additional OS-level isolation is available through Docker runtime and Linux Landlock.
+
+## Workspace scoping
+
+The `workspace_only` setting (default: `true`) rejects any file path that resolves outside the configured workspace directory:
+
+```toml
+[autonomy]
+workspace_only = true
+```
+
+When `workspace_only = true`, the agent refuses to read or write files with absolute paths that fall outside the workspace. Paths are checked after canonicalization to catch symlink escapes.
+
+<Note>
+Symlink escape detection works by resolving the final path and verifying it still falls within the workspace root — not just by checking the raw string.
+</Note>
+
+## Blocked system directories and dotfiles
+
+By default, 14 system directories and 4 sensitive dotfiles are unconditionally blocked:
+
+**System directories**
+
+| Path | Path | Path |
+|------|------|------|
+| `/etc` | `/home` | `/boot` |
+| `/root` | `/usr` | `/dev` |
+| `/proc` | `/bin` | `/sys` |
+| `/var` | `/sbin` | `/tmp` |
+| `/opt` | `/lib` | |
+
+**Sensitive dotfiles**
+
+| Path |
+|------|
+| `~/.ssh` |
+| `~/.gnupg` |
+| `~/.aws` |
+| `~/.config` |
+
+These defaults are set in `forbidden_paths`. You can extend the list in your config:
+
+```toml
+[autonomy]
+forbidden_paths = ["/etc", "/root", "/proc", "/sys", "~/.ssh", "~/.gnupg", "~/.aws"]
+```
+
+## Null byte injection prevention
+
+ZeroClaw blocks null byte (`\0`) characters in all file path inputs. Null bytes can be used to truncate paths at the OS level and bypass string-based path checks. All file read and write tools reject paths containing null bytes before any filesystem operation.
+
+## Outside-workspace access
+
+If the agent needs to access directories outside the workspace, use `allowed_roots` rather than disabling `workspace_only` entirely:
+
+```toml
+[autonomy]
+workspace_only = false
+allowed_roots = ["~/Desktop/projects", "/opt/shared-repo"]
+```
+
+`allowed_roots` supports `~/...` expansion. Only the listed directories are accessible; everything else remains blocked.
+
+## Autonomy levels
+
+The `level` setting in `[autonomy]` controls how much the agent can do without approval:
+
+| Level | Behavior |
+|-------|----------|
+| `readonly` | Agent can read files and run read-only commands; no writes |
+| `supervised` | Agent can act, but requires approval for medium-risk operations (default) |
+| `full` | Agent acts autonomously without approval prompts |
+
+```toml
+[autonomy]
+level = "supervised"
+```
+
+## Docker sandboxed runtime
+
+Setting `[runtime].kind = "docker"` runs all shell execution inside ephemeral containers, providing OS-level isolation:
+
+```toml
+[runtime]
+kind = "docker"
+
+[runtime.docker]
+image = "alpine:3.20"
+network = "none"
+memory_limit_mb = 512
+cpu_limit = 1.0
+read_only_rootfs = true
+mount_workspace = true
+```
+
+<Warning>
+`network = "none"` disables all outbound network access from within the container. Set this to `"bridge"` only if the agent's tools require internet access.
+</Warning>
+
+With `read_only_rootfs = true`, the container's root filesystem is mounted read-only. The workspace is mounted separately at `/workspace` via `mount_workspace = true`.
+
+## Linux Landlock
+
+On Linux, ZeroClaw can use the Landlock kernel security module (requires the `sandbox-landlock` Cargo feature and Linux kernel 5.13+) to restrict filesystem access at the kernel level, independently of application-layer checks.
+
+Landlock applies file system access control rules to the process without requiring containers or root privileges. It restricts which paths the process can read or write at the kernel level, so bypassing the application layer does not bypass the restriction.
+
+When available, Landlock is preferred automatically on Linux as the lowest-overhead sandboxing option. The auto-detection order is:
+
+1. **Landlock** — native, no dependencies, kernel 5.13+
+2. **Firejail** — user-space sandbox, if installed
+3. **Application-layer only** — always present as a baseline
+
+```toml
+[security.sandbox]
+enabled = true
+backend = "landlock"  # auto | landlock | firejail | bubblewrap | docker | none
+```
+
+<Note>
+Application-layer security (allowlists, path blocking, injection protection) is always active regardless of whether OS-level sandboxing is enabled.
+</Note>

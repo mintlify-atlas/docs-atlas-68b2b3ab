@@ -1,0 +1,94 @@
+---
+title: "Skills: extending ZeroClaw with TOML manifests"
+description: "Skills package agent behaviours as TOML manifests and SKILL.md files. Covers install, security audit gates, open-skills opt-in, and prompt injection modes."
+---
+
+Skills package agent behaviours as portable, auditable units: a TOML manifest that declares metadata and a `SKILL.md` file that contains the instructions injected into the agent's system context. No Rust compilation is required — skills extend agent behaviour entirely through configuration and prompt engineering.
+
+## What a skill contains
+
+A skill directory contains at minimum two files:
+
+```
+my-skill/
+├── skill.toml    # manifest: name, version, description, author, tags
+└── SKILL.md      # instruction content injected into the agent's context
+```
+
+The manifest declares identity and metadata. The `SKILL.md` file is what the agent actually reads — write it as a set of instructions, references, or workflow steps the agent should follow when the skill is active.
+
+## Managing skills
+
+```bash
+zeroclaw skills list            # list installed skills
+zeroclaw skills install <path>  # install a skill from a local directory or archive
+zeroclaw skills remove <name>   # uninstall a skill by name
+zeroclaw skills audit <path>    # run the security audit gate without installing
+```
+
+<Note>
+`zeroclaw skills audit` runs the same checks as install but exits without writing anything. Use it to inspect a skill before committing to installation.
+</Note>
+
+## Security audit gate
+
+Every skill passes through an automated audit before installation. The gate blocks skills that contain:
+
+- **Symlinks** — symlinks inside a skill archive could escape the skill directory and read arbitrary files
+- **Script-like files** — executable scripts (`*.sh`, `*.py`, `*.js`, etc.) are not permitted inside skill packages
+- **Shell payloads** — `SKILL.md` and manifest files are scanned for embedded shell command patterns
+
+<Warning>
+The audit gate is a first line of defence, not a sandbox. Review skill content manually before installing skills from untrusted sources, especially on agents with high autonomy levels or broad tool access.
+</Warning>
+
+## Open skills
+
+By default ZeroClaw only loads skills from paths you explicitly configure. Open skills enables loading from the community skills registry without per-skill path configuration.
+
+### Enable via config
+
+```toml
+[skills]
+open_skills_enabled = true
+```
+
+### Enable via environment variable
+
+```bash
+export ZEROCLAW_OPEN_SKILLS_ENABLED=true
+zeroclaw agent
+```
+
+<Warning>
+Open skills increases the attack surface. Enable only when you trust the skills registry and have reviewed the audit gate output for each skill in use.
+</Warning>
+
+## Prompt injection mode
+
+When a skill is active, its `SKILL.md` content is injected into the agent's system prompt. Two injection modes control how much space the skill content occupies:
+
+| Mode | Description | Use case |
+|---|---|---|
+| `full` | The complete `SKILL.md` is injected verbatim | Default; models with large context windows |
+| `compact` | A summarised or truncated version is injected | Low-context models where token budget is limited |
+
+```toml
+[skills]
+injection_mode = "compact"   # full (default) | compact
+```
+
+Choose `compact` when running against small local models or when multiple skills are active simultaneously and context length is a constraint.
+
+## Example skill manifest
+
+```toml
+[skill]
+name        = "code-reviewer"
+version     = "1.0.0"
+description = "Instructs the agent to apply structured code review criteria"
+author      = "your-name"
+tags        = ["development", "review"]
+```
+
+The corresponding `SKILL.md` would contain the review criteria, rubric, or checklist the agent should follow when the skill is active.

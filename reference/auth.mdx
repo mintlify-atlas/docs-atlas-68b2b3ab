@@ -1,0 +1,181 @@
+---
+title: "Authentication: API keys, OAuth, and auth profiles"
+description: "Configure API key auth, manage encrypted subscription auth profiles, and authenticate with OpenAI Codex OAuth or Anthropic token flows in ZeroClaw."
+---
+
+ZeroClaw supports two authentication models: a traditional API key placed in `config.toml` or an environment variable, and subscription-native auth profiles for providers that issue OAuth tokens (OpenAI Codex) or setup tokens (Anthropic / Claude Code). Auth profiles are stored encrypted on disk and can be scoped per provider and per account.
+
+---
+
+## API key authentication
+
+The simplest authentication method is a static API key. Set it in `~/.zeroclaw/config.toml`:
+
+```toml
+[provider]
+api_key = "sk-..."
+```
+
+Or export it as an environment variable before running any command:
+
+```bash
+export ZEROCLAW_API_KEY="sk-..."
+zeroclaw agent -m "Hello"
+```
+
+Anthropic also recognizes the following environment variables (all equivalent for the `anthropic` provider):
+
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+# or
+export ANTHROPIC_AUTH_TOKEN="..."
+# or
+export ANTHROPIC_OAUTH_TOKEN="..."
+```
+
+---
+
+## Auth profiles
+
+Auth profiles let you store multiple sets of credentials for the same provider—for example, a personal and a work ChatGPT subscription—and switch between them without editing `config.toml`.
+
+**Storage**
+
+| Item             | Path                              |
+| ---------------- | --------------------------------- |
+| Profile store    | `~/.zeroclaw/auth-profiles.json`  |
+| Encryption key   | `~/.zeroclaw/.secret_key`         |
+
+Profiles are AES-encrypted at rest using the key file. The key file is created automatically on first use and must not be shared or committed to version control.
+
+**Profile ID format**
+
+Every profile is identified by the string `<provider>:<profile_name>`, for example `openai-codex:work` or `anthropic:default`. The `default` profile name is the fallback when no `--profile` flag is given.
+
+---
+
+## OpenAI Codex OAuth (ChatGPT subscription)
+
+ZeroClaw supports two OAuth flows for OpenAI Codex: a device-code flow for headless/server environments and a browser/callback flow for desktop use.
+
+### Device-code flow (recommended for servers)
+
+```bash
+zeroclaw auth login --provider openai-codex --device-code
+```
+
+ZeroClaw prints a short code and a verification URL. Open the URL in any browser, enter the code, and approve the request. The token is saved automatically to the `default` profile.
+
+### Browser/callback flow
+
+```bash
+# Step 1: open the browser login page
+zeroclaw auth login --provider openai-codex --profile default
+
+# Step 2: after the browser redirects, paste the full redirect URL
+zeroclaw auth paste-redirect --provider openai-codex --profile default
+```
+
+If you have the redirect URL available as a string, pass it directly:
+
+```bash
+zeroclaw auth paste-redirect --provider openai-codex --profile default --input "https://..."
+```
+
+---
+
+## Anthropic / Claude Code token auth
+
+Claude Code uses a setup token (authorization header mode) rather than OAuth.
+
+<Warning>
+Anthropic updated its Authentication and Credential Use terms on 2026-02-19. Claude Code OAuth tokens (Free, Pro, Max) are intended exclusively for Claude Code and Claude.ai. Using OAuth tokens from Claude Free/Pro/Max in other tools may violate the Consumer Terms of Service. Use API keys for production integrations.
+</Warning>
+
+```bash
+# Paste a subscription or setup token (prompts interactively if --token is omitted)
+zeroclaw auth paste-token --provider anthropic --profile default --auth-kind authorization
+
+# Alias command (always interactive)
+zeroclaw auth setup-token --provider anthropic --profile default
+```
+
+<ParamField path="body.auth_kind" type="string">
+  Token interpretation mode. Use `authorization` for Authorization-header tokens (Claude Code setup tokens) or `api-key` for standard API keys stored as a profile.
+</ParamField>
+
+---
+
+## Managing profiles
+
+### Check status
+
+```bash
+zeroclaw auth status
+```
+
+Prints the active profile for each provider and shows token expiry information where available.
+
+### Refresh an access token
+
+```bash
+zeroclaw auth refresh --provider openai-codex --profile default
+```
+
+Uses the stored refresh token to obtain a new access token. The updated token is written back to the profile store automatically.
+
+### Switch the active profile
+
+```bash
+zeroclaw auth use --provider openai-codex --profile work
+```
+
+### List all profiles
+
+```bash
+zeroclaw auth list
+```
+
+### Remove a profile
+
+```bash
+zeroclaw auth logout --provider openai-codex --profile work
+```
+
+---
+
+## Running the agent with subscription auth
+
+Once a profile is saved, pass `--provider` to select the authenticated provider. ZeroClaw resolves the active profile automatically:
+
+```bash
+zeroclaw agent --provider openai-codex -m "hello"
+```
+
+To use a specific named profile, pass its full profile ID with `--auth-profile`:
+
+```bash
+zeroclaw agent --provider openai-codex --auth-profile openai-codex:work -m "hello"
+```
+
+For the Anthropic provider, the same command works with either an API key in the environment or a stored auth token profile:
+
+```bash
+zeroclaw agent --provider anthropic -m "hello"
+```
+
+---
+
+## Auth commands summary
+
+| Command                    | Description                                                          |
+| -------------------------- | -------------------------------------------------------------------- |
+| `auth login`               | Start an OAuth flow (OpenAI Codex or Gemini)                         |
+| `auth paste-redirect`      | Complete an OAuth flow by pasting the redirect URL or code           |
+| `auth paste-token`         | Store a subscription or setup token (Anthropic)                      |
+| `auth setup-token`         | Alias for `paste-token`, always interactive                          |
+| `auth refresh`             | Refresh an OAuth access token using the stored refresh token         |
+| `auth use`                 | Set the active profile for a provider                                |
+| `auth list`                | List all stored auth profiles                                        |
+| `auth status`              | Show active profiles and token expiry information                    |
+| `auth logout`              | Remove a stored auth profile                                         |

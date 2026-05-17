@@ -1,0 +1,98 @@
+---
+title: "ZeroClaw — AI agent runtime built in Rust"
+description: "Learn what ZeroClaw is, how its trait-driven architecture works, and how it compares to other runtimes in memory usage, startup time, and cost."
+---
+
+ZeroClaw is a fast, small, fully autonomous AI assistant infrastructure runtime written in Rust. It runs as a single binary, uses less than 5MB of RAM at runtime, and starts in under 10ms — making it deployable on anything from a $10 ARM board to a cloud VM. Every core subsystem (AI providers, messaging channels, memory backends, tools, tunnels) is defined as a Rust trait, so you can swap any component with a one-line config change and zero code modifications.
+
+<Note>
+  The official repository is [github.com/zeroclaw-labs/zeroclaw](https://github.com/zeroclaw-labs/zeroclaw). Do not trust binaries, announcements, or fundraising from `openagen/zeroclaw`, `zeroclaw.org`, or `zeroclaw.net` — those domains are impersonating the official project.
+</Note>
+
+## Why ZeroClaw exists
+
+Most AI agent runtimes are built on interpreted languages with heavy dependency trees. They start slowly, consume hundreds of megabytes of memory, and are difficult to deploy on constrained hardware. ZeroClaw is the opposite: a Rust binary with no mandatory runtime dependencies, a sub-10ms cold start, and a design that makes provider, channel, and tool lock-in impossible by construction.
+
+The four principles that guide every design decision:
+
+- **Lean by default** — small Rust binary, fast startup, low memory footprint
+- **Secure by design** — gateway pairing, strict sandboxing, explicit allowlists, workspace scoping
+- **Fully swappable** — all core systems are traits (providers, channels, tools, memory, tunnels)
+- **No lock-in** — OpenAI-compatible provider support plus pluggable custom endpoints
+
+## Benchmark comparison
+
+The table below compares ZeroClaw against three other runtimes on a macOS arm64 machine, normalized for 0.8 GHz edge hardware (measured February 2026).
+
+| | OpenClaw | NanoBot | PicoClaw | ZeroClaw |
+|---|---|---|---|---|
+| **Language** | TypeScript | Python | Go | **Rust** |
+| **RAM** | > 1 GB | > 100 MB | < 10 MB | **< 5 MB** |
+| **Startup (0.8 GHz core)** | > 500 s | > 30 s | < 1 s | **< 10 ms** |
+| **Binary size** | ~28 MB (dist) | N/A (scripts) | ~8 MB | **~8.8 MB** |
+| **Minimum hardware cost** | Mac Mini $599 | Linux SBC ~$50 | Linux board $10 | **Any hardware $10** |
+
+OpenClaw requires the Node.js runtime (~390 MB additional memory overhead). NanoBot requires a Python runtime. PicoClaw and ZeroClaw are static binaries. RAM figures are runtime memory; build-time compilation requires more.
+
+You can reproduce these numbers on your own build:
+
+```bash
+cargo build --release
+ls -lh target/release/zeroclaw
+/usr/bin/time -l target/release/zeroclaw --help
+/usr/bin/time -l target/release/zeroclaw status
+```
+
+## Architecture overview
+
+Every ZeroClaw subsystem is a **Rust trait**. Swapping an implementation means changing one line in `~/.zeroclaw/config.toml` — no recompilation, no code changes.
+
+| Subsystem | Trait | Ships with | Extend by |
+|---|---|---|---|
+| **AI models** | `Provider` | Provider catalog via `zeroclaw providers` (built-ins + aliases + custom endpoints) | `custom:https://your-api.com` (OpenAI-compatible) or `anthropic-custom:https://your-api.com` |
+| **Channels** | `Channel` | CLI, Telegram, Discord, Slack, Mattermost, iMessage, Matrix, Signal, WhatsApp, Linq, Email, IRC, Lark, DingTalk, QQ, Nostr, Webhook | Any messaging API |
+| **Memory** | `Memory` | SQLite hybrid search, PostgreSQL, Lucid bridge, Markdown files, explicit `none` backend | Any persistence backend |
+| **Tools** | `Tool` | shell/file/memory, cron/schedule, git, pushover, browser, http_request, screenshot/image_info, composio (opt-in), delegate, hardware tools | Any capability |
+| **Observability** | `Observer` | Noop, Log, Multi | Prometheus, OTel |
+| **Runtime** | `RuntimeAdapter` | Native, Docker (sandboxed) | Additional runtimes via adapter |
+| **Security** | `SecurityPolicy` | Gateway pairing, sandbox, allowlists, rate limits, filesystem scoping, encrypted secrets | — |
+| **Identity** | `IdentityConfig` | OpenClaw (markdown), AIEOS v1.1 (JSON) | Any identity format |
+| **Tunnel** | `Tunnel` | None, Cloudflare, Tailscale, ngrok, Custom | Any tunnel binary |
+| **Heartbeat** | Engine | `HEARTBEAT.md` periodic tasks | — |
+| **Skills** | Loader | TOML manifests + `SKILL.md` instructions | Community skill packs |
+| **Integrations** | Registry | 70+ integrations across 9 categories | Plugin system |
+
+Currently supported runtime kinds are `native` and `docker`. WASM and edge runtimes are planned but not yet implemented — ZeroClaw exits with a clear error if you configure an unsupported kind.
+
+## Memory system
+
+ZeroClaw ships a full-stack hybrid search engine with no external dependencies — no Pinecone, no Elasticsearch, no LangChain:
+
+| Layer | Implementation |
+|---|---|
+| **Vector DB** | Embeddings stored as BLOB in SQLite, cosine similarity search |
+| **Keyword search** | FTS5 virtual tables with BM25 scoring |
+| **Hybrid merge** | Custom weighted merge function (`vector.rs`) |
+| **Embeddings** | `EmbeddingProvider` trait — OpenAI, custom URL, or noop |
+| **Chunking** | Line-based markdown chunker with heading preservation |
+| **Caching** | SQLite `embedding_cache` table with LRU eviction |
+| **Safe reindex** | Rebuild FTS5 + re-embed missing vectors atomically |
+
+The agent automatically recalls, saves, and manages memory via tools — no manual wiring required.
+
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Install ZeroClaw, onboard, and send your first message in under five minutes
+  </Card>
+  <Card title="Installation" icon="download" href="/installation">
+    Detailed install options for Linux, macOS, Windows, and ARM devices
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration/overview">
+    Configure providers, channels, memory backends, and autonomy settings
+  </Card>
+  <Card title="CLI reference" icon="terminal" href="/reference/commands">
+    Complete reference for every ZeroClaw command and flag
+  </Card>
+</CardGroup>
